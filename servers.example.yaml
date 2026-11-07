@@ -1,0 +1,80 @@
+# One MCP server on the platform's networks, as an example of what every server needs. Copy this file to servers.yaml,
+# change the names, and add it to .env:
+#   COMPOSE_FILE=compose.yaml:servers.yaml
+# Before the server starts, issue its certificate, Redis account and secrets (README, Add an MCP server):
+#   docker compose run --rm init issue mcp-example
+# This file shows the server of the mcp-server-example image (serverId mcp-example, system example). A server from another
+# image has its own serverId and settings: the ones below that come from mcp-gateway, the Redis and the certificate stay the
+# same, the backend settings (MCP_EXAMPLE_*) are named after the system.
+
+services:
+  mcp-example:
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-server-example:${MCP_EXAMPLE_VERSION:-2.0.0}
+    pull_policy: ${PULL_POLICY:-missing}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # cedar-java unpacks its native library at start.
+    tmpfs: ["/tmp:exec"]
+    mem_limit: ${MCP_EXAMPLE_MEM_LIMIT:-1g}
+    environment:
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
+      # The store password, the Redis password and the paging cursor key are files written by `init issue`.
+      SPRING_CONFIG_IMPORT: optional:configtree:/secrets/env/
+      MCP_TLS_KEYSTORE: /certs/own/keystore.p12
+      MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+      MCP_GATEWAY_JWKS_URI: https://mcp-gateway.internal:8443/.well-known/jwks.json
+      MCP_GATEWAY_POLICY_DATA_URL: https://mcp-gateway.internal:8443/internal/v1/policy-data
+      MCP_CONNECT_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/connections?system={system}
+      MCP_INTERNAL_URL: https://mcp-example.internal:8443/mcp
+      MCP_ACCEPTED_CREDENTIAL_TYPES: user-secret
+      MCP_REDIS_HOST: servers-redis
+      # API of the backend system, https. Set both in .env for the stub backend below: plain http is for tests only.
+      MCP_EXAMPLE_URL: ${MCP_EXAMPLE_URL:?set MCP_EXAMPLE_URL in .env}
+      MCP_EXAMPLE_ALLOW_PLAIN_HTTP: ${MCP_EXAMPLE_ALLOW_PLAIN_HTTP:-false}
+    volumes:
+      - type: volume
+        source: secrets
+        target: /certs/own
+        read_only: true
+        volume: {subpath: pki/certs/mcp-example}
+      - type: volume
+        source: secrets
+        target: /certs/trust
+        read_only: true
+        volume: {subpath: pki/trust}
+      - type: volume
+        source: secrets
+        target: /secrets/env
+        read_only: true
+        volume: {subpath: servers/mcp-example/env}
+    networks:
+      # The gateway reaches the server by this name, which is the SAN of the certificate; egress is the way to the backend.
+      servers:
+        aliases: [mcp-example.internal]
+      egress: {}
+    healthcheck:
+      # An open port is the signal: /actuator/health asks for a client certificate like every other path.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 30s
+    depends_on:
+      servers-redis: {condition: service_healthy}
+
+  # Test stack only (profile "stub"): the stub backend of mcp-server-template, built there as mcp-stub-backend/target/mcp-stub-backend.jar.
+  # It accepts any credential and speaks plain http. Never on a production host.
+  stub-backend:
+    profiles: [stub]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/eclipse-temurin:25-jre@sha256:78f1f183913482ef390c2722f46c3f0ce76ada341d69590e7c482ec943ee72d5
+    pull_policy: ${PULL_POLICY:-missing}
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["java", "-jar", "/app/stub-backend.jar", "--bind", "0.0.0.0", "--port", "18081"]
+    volumes:
+      - ${MCP_STUB_BACKEND_JAR:-./mcp-stub-backend.jar}:/app/stub-backend.jar:ro
+    networks: [servers]
