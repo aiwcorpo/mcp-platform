@@ -382,6 +382,8 @@ services:
   # The replica logs in to the primary under the name "redis" (written into its configuration by the gateway's init).
   gateway-redis:
     <<: *redis
+    # The files gateway-init wrote for Redis are 0640 in the gateway image's group (fixed gid 10001).
+    group_add: ["10001"]
     command: ["redis-server", "/secrets/redis/primary.conf"]
     volumes:
       - gateway-redis:/data
@@ -398,6 +400,7 @@ services:
 
   gateway-redis-replica:
     <<: *redis
+    group_add: ["10001"]
     command: ["redis-server", "/secrets/redis/replica.conf"]
     volumes:
       - gateway-redis-replica:/data

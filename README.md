@@ -91,6 +91,8 @@ servers, add your own in the console.
 | `servers-redis` | Redis for the one-time jti of MCP servers | servers |
 | `init`, `gateway-init` | one-shot setup (the second one is the gateway's own `init` command) | |
 
+`gateway-init` writes the files it shares with the gateway's PostgreSQL and Redis (their passwords, the Redis configuration and ACL) as mode 0640 in group 10001, the fixed group of the gateway image, and the Redis ACL holds only password hashes. The two gateway Redis services join that group (`group_add` in `compose.yaml`) and `init` keeps the directories at 0750 for owner and group. A gateway image built before that group id was fixed runs with gid 999 and does not fit this layout.
+
 All networks are internal except `public` (the two nginx containers) and `egress` (the broker, for the systems behind it, and the gateway, for servers on other hosts). The gateway, broker and portal
 reach Keycloak at `https://keycloak.internal:8443` with a certificate of the internal CA, so token checks and token exchange never
 depend on the public certificate; the domain name also resolves to nginx inside Docker. Tokens carry the public issuer

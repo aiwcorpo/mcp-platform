@@ -47,11 +47,11 @@ put() {
   chmod "$3" "$1"
 }
 
-# dir <path> <owner>: a directory a service mounts as the root of its volume subpath.
+# dir <path> <owner> [mode]: a directory a service mounts as the root of its volume subpath (mode 755 unless given).
 dir() {
   mk "$1"
   chown "$2" "$1"
-  chmod 755 "$1"
+  chmod "${3:-755}" "$1"
 }
 
 # value <name> [base64]: a generated secret, created on the first call and kept in state/.
@@ -242,15 +242,20 @@ bootstrap() {
 
   # Per consumer, mounted read-only by that service only.
   dir "$S/gw" 0:0
-  for d in gateway postgres redis; do dir "$S/gw/$d" 999:999; done
-  put "$S/gw/gateway/env/MCP_TLS_STORE_PASSWORD" 999:999 400 < "$PKI/store-password"
+  # The gateway image runs as uid 999 with the fixed gid 10001. Its own `init` (gateway-init) shares files with the gateway's
+  # PostgreSQL and Redis as 0640 in that group, and keeps these directories at the modes set here, so they are not widened on
+  # every start. The Redis services join the group (group_add in compose.yaml).
+  dir "$S/gw/gateway" 999:10001 700
+  dir "$S/gw/postgres" 999:10001 750
+  dir "$S/gw/redis" 999:10001 750
+  put "$S/gw/gateway/env/MCP_TLS_STORE_PASSWORD" 999:10001 400 < "$PKI/store-password"
   value kc-client-mcp-gateway > /dev/null
   value kc-client-mcp-portal-bff > /dev/null
   value kc-client-mcp-credential-broker > /dev/null
   value kc-client-mcp-gateway-admin > /dev/null
   value kc-client-opensearch > /dev/null
-  chown 999:999 "$S/gw/gateway/env"; chmod 755 "$S/gw/gateway/env"
-  value kc-client-mcp-gateway | put "$S/gw/gateway/env/MCP_OIDC_CLIENT_SECRET" 999:999 400
+  chown 999:10001 "$S/gw/gateway/env"; chmod 755 "$S/gw/gateway/env"
+  value kc-client-mcp-gateway | put "$S/gw/gateway/env/MCP_OIDC_CLIENT_SECRET" 999:10001 400
 
   dir "$S/portal" 0:0
   mk "$S/portal/env"; chown 100:101 "$S/portal/env"; chmod 755 "$S/portal/env"
