@@ -63,7 +63,8 @@ A user without an OTP enrolls one at the first login (CONFIGURE_TOTP is a defaul
 asked after the password at every login, for every client including the AI clients, and before any required action: someone who knows
 only the password cannot reach the OTP setup page, neither through the account console nor through an application-initiated action
 (`kc_action=CONFIGURE_TOTP`), so cannot add a second OTP of their own. Step-up, which the administration and the portal's Authenticator
-need, takes the OTP of that login (or asks for it) and refuses a user who has none: it never offers enrollment, so a password alone cannot
+need, takes the OTP entered in the same authentication (a step-up with `max_age=0` always authenticates again, so an OTP from an earlier
+login in the same SSO session never counts), or asks for it and refuses a user who has none: it never offers enrollment, so a password alone cannot
 reach the level `mfa`. A user therefore has two entries in the authenticator app: the OTP of the login, and the platform
 Authenticator that the portal registers for confirming destructive actions.
 
