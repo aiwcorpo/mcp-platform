@@ -1,0 +1,643 @@
+# The whole MCP platform on one Docker host: nginx, identity provider (Keycloak), OpenBao, credential broker, gateway, portal, each
+# with the databases it needs. Only nginx publishes ports (443 for all user traffic, 80 redirects to https). MCP servers are not
+# part of this file: see servers.example.yaml. Configuration: platform.env copied to .env, and the files in certs/. See README.md.
+#
+# The init service runs first on every start: it checks the configuration and generates what is missing (internal CA, every internal
+# certificate, every password and key, the OpenBao AppRole). The other services start only after it succeeds.
+#
+# Networks (all internal except "public" and "egress"):
+#   public    nginx only: the network that lets Docker publish its ports
+#   edge      nginx, Keycloak, portal, gateway, broker; nginx also answers here under the platform's domain name
+#   secrets   OpenBao, its unseal service and the broker
+#   servers   gateway, MCP servers and the Redis they share (jti of the internal tokens)
+#   *-stores  a database or Redis and its one client
+#   egress    the broker (and MCP servers, in servers.example.yaml): the way out to the systems behind them
+#
+# Closed network: MCP_REGISTRY and MCP_THIRD_PARTY_REGISTRY in the .env file point the images to your registry.
+
+name: mcp-platform
+
+x-third-party: &third-party
+  pull_policy: ${PULL_POLICY:-missing}
+
+x-hardened: &hardened
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-store: &store
+  <<: [*third-party, *hardened]
+  restart: unless-stopped
+
+x-postgres: &postgres
+  <<: *store
+  image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+  cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+
+x-redis: &redis
+  <<: *store
+  image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/redis:8.8.4-alpine@sha256:be8dfdf58574d626e0abe03073ce9178509e0e9564a316e34e71d2289b8370e1
+  user: redis
+  # The default user is off, so an answer that asks for a login proves the server is up.
+  healthcheck: &redis-health
+    test: ["CMD-SHELL", "redis-cli ping 2>&1 | grep -qE 'PONG|NOAUTH'"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+# Java services: the internal CA is in the default trust store of the JVM next to the public CAs (the identity provider answers
+# on the internal network with a certificate of the internal CA); the company CA is there too.
+x-java: &java
+  <<: [*third-party, *hardened]
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp:exec"]
+  environment: &java-env
+    JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
+
+x-depends-init: &depends-init
+  init: {condition: service_completed_successfully}
+
+services:
+  init:
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/eclipse-temurin:25-jre@sha256:78f1f183913482ef390c2722f46c3f0ce76ada341d69590e7c482ec943ee72d5
+    <<: *third-party
+    entrypoint: ["/bin/sh", "/init/init.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      MCP_DOMAIN: ${MCP_DOMAIN:?set MCP_DOMAIN in .env (copy platform.env to .env)}
+      MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      MCP_ADMIN_USERNAME: ${MCP_ADMIN_USERNAME:-mcp-admin}
+      MCP_BROKER_TRUST_COMPANY_CA: ${MCP_BROKER_TRUST_COMPANY_CA:-false}
+    volumes:
+      - secrets:/secrets
+      - ./certs:/operator-certs:ro
+      - ./init/init.sh:/init/init.sh:ro
+    # Reaches the servers' Redis to load the account of a new MCP server.
+    networks: [servers]
+
+  nginx:
+    <<: [*third-party, *hardened]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    tmpfs: ["/tmp"]
+    # Binding 443 and 80 as a non-root user without the NET_BIND_SERVICE capability.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0
+    environment:
+      MCP_DOMAIN: ${MCP_DOMAIN:?set MCP_DOMAIN in .env (copy platform.env to .env)}
+      MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      MCP_HTTPS_PORT: ${MCP_HTTPS_PORT:-443}
+      MCP_HTTP_PORT: ${MCP_HTTP_PORT:-80}
+    # nginx cannot read the environment: the domain and the ports go into the server blocks here.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        PUBLIC_HOST="$${MCP_PUBLIC_ORIGIN#https://}"; export PUBLIC_HOST
+        envsubst '$${MCP_DOMAIN} $${MCP_HTTPS_PORT} $${MCP_HTTP_PORT} $${MCP_PUBLIC_ORIGIN} $${PUBLIC_HOST}' \
+          < /etc/nginx/servers.conf.template > /tmp/servers.conf
+        exec nginx -g 'daemon off;'
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/servers.conf.template:/etc/nginx/servers.conf.template:ro
+      - ./nginx/routes.conf:/etc/nginx/routes.conf:ro
+      - ./nginx/proxy-common.conf:/etc/nginx/proxy-common.conf:ro
+      - ./nginx/to-portal.conf:/etc/nginx/to-portal.conf:ro
+      - ./nginx/to-gateway.conf:/etc/nginx/to-gateway.conf:ro
+      - ./nginx/to-keycloak.conf:/etc/nginx/to-keycloak.conf:ro
+      - ./nginx/keycloak-admin-allow.conf:/etc/nginx/keycloak-admin-allow.conf:ro
+      - ./nginx/gateway-headers.conf:/etc/nginx/gateway-headers.conf:ro
+      - ./nginx/errors:/etc/nginx/errors:ro
+      - type: volume
+        source: secrets
+        target: /etc/nginx/tls
+        read_only: true
+        volume: {subpath: nginx}
+    ports:
+      - ${MCP_BIND:-0.0.0.0}:${MCP_HTTPS_PORT:-443}:${MCP_HTTPS_PORT:-443}
+      - ${MCP_BIND:-0.0.0.0}:${MCP_HTTP_PORT:-80}:${MCP_HTTP_PORT:-80}
+    networks:
+      public: {}
+      # The domain name answers inside Docker too, so that a component that is given the public address reaches nginx.
+      edge:
+        aliases: ["${MCP_DOMAIN}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${MCP_HTTP_PORT}/__proxy/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on: *depends-init
+
+  # Off by default (profile "ci"): TCP passthrough of the gateway's mTLS port for a pipeline outside this host.
+  nginx-ci:
+    <<: [*third-party, *hardened]
+    profiles: [ci]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    restart: unless-stopped
+    user: "101:101"
+    read_only: true
+    tmpfs: ["/tmp"]
+    command: ["nginx", "-c", "/etc/nginx/stream.conf", "-g", "daemon off;"]
+    volumes:
+      - ./nginx/stream.conf:/etc/nginx/stream.conf:ro
+    ports:
+      - ${MCP_CI_BIND:-0.0.0.0}:${MCP_CI_PORT:-8443}:8443
+    networks: [public, edge]
+    depends_on: *depends-init
+
+  keycloak-postgres:
+    <<: *postgres
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_DB: keycloak
+      POSTGRES_PASSWORD_FILE: /secrets/postgres/password
+    volumes:
+      - keycloak-db:/var/lib/postgresql
+      - type: volume
+        source: secrets
+        target: /secrets/postgres
+        read_only: true
+        volume: {subpath: keycloak-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [keycloak-stores]
+    depends_on: *depends-init
+
+  # Production mode ("start") behind nginx at /auth. The realm is imported once, when it does not exist; after that it is
+  # the database's. Secrets of the realm and the bootstrap administrator come from the file init wrote.
+  keycloak:
+    <<: [*third-party, *hardened]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-quay.io/keycloak}/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
+    restart: unless-stopped
+    entrypoint: ["/bin/bash", "-c", "set -a; . /secrets/env; set +a; exec /opt/keycloak/bin/kc.sh start --import-realm"]
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://keycloak-postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_HOSTNAME: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth
+      KC_HTTP_RELATIVE_PATH: /auth
+      # nginx terminates the public TLS and speaks http to this port; the platform's own components use 8443 with a
+      # certificate of the internal CA.
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: xforwarded
+      KC_HTTPS_CERTIFICATE_FILE: /certs/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /certs/tls.key
+      # With https enabled the management interface (health, port 9000) switches to https as well; the healthcheck is plain.
+      KC_HTTP_MANAGEMENT_SCHEME: http
+      KC_HEALTH_ENABLED: "true"
+      KC_LOG_LEVEL: info
+      MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      MCP_ADMIN_USERNAME: ${MCP_ADMIN_USERNAME:-mcp-admin}
+      MCP_CLAUDE_CODE_CALLBACK_PORT: ${MCP_CLAUDE_CODE_CALLBACK_PORT:-33418}
+    volumes:
+      - ./keycloak/realm-mcp.json:/opt/keycloak/data/import/realm-mcp.json:ro
+      - type: volume
+        source: secrets
+        target: /secrets
+        read_only: true
+        volume: {subpath: keycloak}
+      - type: volume
+        source: secrets
+        target: /certs
+        read_only: true
+        volume: {subpath: pki/certs/keycloak}
+    networks:
+      edge:
+        aliases: [keycloak.internal]
+      keycloak-stores: {}
+    healthcheck:
+      # The image has no curl; bash /dev/tcp is enough for the management health endpoint.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /auth/health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    mem_limit: ${KEYCLOAK_MEM_LIMIT:-2g}
+    depends_on:
+      <<: *depends-init
+      keycloak-postgres: {condition: service_healthy}
+
+  # Sealed after every start. openbao-unseal initialises it once, unseals it after every start and keeps it unsealed
+  # (README, OpenBao after a restart).
+  openbao:
+    <<: [*third-party, *hardened]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+    restart: unless-stopped
+    # Not root, so the entrypoint of the image does not try to change the owner of the data directory.
+    user: "100:1000"
+    command: ["server", "-config=/openbao/server.hcl"]
+    environment:
+      BAO_ADDR: https://127.0.0.1:8200
+      BAO_CACERT: /openbao/tls/ca.crt
+    volumes:
+      - openbao-data:/openbao/file
+      - ./openbao/server.hcl:/openbao/server.hcl:ro
+      - type: volume
+        source: secrets
+        target: /openbao/tls
+        read_only: true
+        volume: {subpath: pki/certs/openbao}
+    networks:
+      secrets:
+        aliases: [openbao.internal]
+    healthcheck:
+      # Liveness only: exit code 2 of `bao status` is "sealed".
+      test: ["CMD-SHELL", "bao status >/dev/null 2>&1; [ $$? -ne 1 ]"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on: *depends-init
+
+  openbao-unseal:
+    <<: [*third-party, *hardened]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/init/init.sh", "openbao"]
+    # Root, to write the key volume; without capabilities it still reads only what it owns.
+    user: "0:0"
+    read_only: true
+    tmpfs: ["/tmp"]
+    environment:
+      BAO_ADDR: https://openbao.internal:8200
+      BAO_SECRET_ID_TTL: ${MCP_BAO_SECRET_ID_TTL:-720h}
+    volumes:
+      - openbao-keys:/keys
+      - ./init/init.sh:/init/init.sh:ro
+      - type: volume
+        source: secrets
+        target: /approle
+        read_only: true
+        volume: {subpath: openbao-approle}
+      - type: volume
+        source: secrets
+        target: /trust
+        read_only: true
+        volume: {subpath: pki/trust}
+    networks: [secrets]
+    healthcheck:
+      # Ready: unsealed and provisioned (policy, transit keys, AppRole).
+      test: ["CMD", "test", "-e", "/tmp/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 5s
+    depends_on:
+      <<: *depends-init
+      openbao: {condition: service_healthy}
+
+  # The gateway's own setup (passwords of its PostgreSQL and Redis, the Redis configuration and ACL, internal JWT keys, cursor
+  # keys) and the checks of its configuration, including a request for the keys of the identity provider.
+  gateway-init:
+    <<: *java
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.0}
+    command: ["init", "/secrets"]
+    restart: "no"
+    tmpfs: ["/tmp"]
+    environment: &gateway-env
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: optional:configtree:/secrets/gateway/env/
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      MCP_OIDC_ISSUER: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth/realms/mcp
+      MCP_OIDC_JWKS_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/certs
+      MCP_OIDC_TOKEN_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/token
+      MCP_OIDC_AUTHORIZATION_SERVER: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth/realms/mcp
+      MCP_OIDC_AUDIENCE: mcp-gateway
+      MCP_OIDC_CLIENT_ID: mcp-gateway
+      MCP_DB_URL: jdbc:postgresql://postgres:5432/gateway
+      MCP_REDIS_HOST: redis
+      MCP_REDIS_WAIT_REPLICAS: "1"
+      MCP_BROKER_URL: https://mcp-credential-broker.internal:8443
+      MCP_BROKER_TLS_NAME: mcp-credential-broker.internal
+      # The portal's client certificate (CN mcp-portal-bff) and the token it gets by its login; the administrator's login must
+      # be fresh (auth_time within 5 minutes) with the acr the realm gives to a login that included the OTP.
+      MCP_ADMIN_CLIENT_CNS: mcp-portal-bff
+      MCP_ADMIN_AUTHORIZED_PARTY: mcp-portal-bff
+      MCP_ADMIN_MFA_ACR_VALUES: mfa
+      MCP_TLS_KEYSTORE: /certs/own/keystore.p12
+      MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+    volumes: &gateway-certs
+      - type: volume
+        source: secrets
+        target: /certs/own
+        read_only: true
+        volume: {subpath: pki/certs/mcp-gateway}
+      - type: volume
+        source: secrets
+        target: /certs/trust
+        read_only: true
+        volume: {subpath: pki/trust}
+      - type: volume
+        source: secrets
+        target: /secrets/gateway
+        volume: {subpath: gw/gateway}
+      - type: volume
+        source: secrets
+        target: /secrets/postgres
+        volume: {subpath: gw/postgres}
+      - type: volume
+        source: secrets
+        target: /secrets/redis
+        volume: {subpath: gw/redis}
+    networks: [edge]
+    depends_on:
+      <<: *depends-init
+      keycloak: {condition: service_healthy}
+      nginx: {condition: service_healthy}
+
+  gateway-postgres:
+    <<: *postgres
+    environment:
+      POSTGRES_USER: gateway
+      POSTGRES_DB: gateway
+      POSTGRES_PASSWORD_FILE: /secrets/postgres/password
+    volumes:
+      - gateway-db:/var/lib/postgresql
+      - type: volume
+        source: secrets
+        target: /secrets/postgres
+        read_only: true
+        volume: {subpath: gw/postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gateway -d gateway"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      gateway-stores:
+        aliases: [postgres]
+    depends_on:
+      gateway-init: {condition: service_completed_successfully}
+
+  # The replica logs in to the primary under the name "redis" (written into its configuration by the gateway's init).
+  gateway-redis:
+    <<: *redis
+    command: ["redis-server", "/secrets/redis/primary.conf"]
+    volumes:
+      - gateway-redis:/data
+      - type: volume
+        source: secrets
+        target: /secrets/redis
+        read_only: true
+        volume: {subpath: gw/redis}
+    networks:
+      gateway-stores:
+        aliases: [redis]
+    depends_on:
+      gateway-init: {condition: service_completed_successfully}
+
+  gateway-redis-replica:
+    <<: *redis
+    command: ["redis-server", "/secrets/redis/replica.conf"]
+    volumes:
+      - gateway-redis-replica:/data
+      - type: volume
+        source: secrets
+        target: /secrets/redis
+        read_only: true
+        volume: {subpath: gw/redis}
+    networks: [gateway-stores]
+    depends_on:
+      gateway-redis: {condition: service_healthy}
+
+  gateway:
+    <<: *java
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.0}
+    mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
+    environment: *gateway-env
+    volumes:
+      - type: volume
+        source: secrets
+        target: /certs/own
+        read_only: true
+        volume: {subpath: pki/certs/mcp-gateway}
+      - type: volume
+        source: secrets
+        target: /certs/trust
+        read_only: true
+        volume: {subpath: pki/trust}
+      - type: volume
+        source: secrets
+        target: /secrets/gateway
+        read_only: true
+        volume: {subpath: gw/gateway}
+    # 8080 (plain http, for nginx) and 8443 (mTLS: broker, MCP servers, admin API) are reachable on the internal networks only.
+    networks:
+      edge:
+        aliases: [mcp-gateway.internal]
+      servers:
+        aliases: [mcp-gateway.internal]
+      gateway-stores: {}
+    healthcheck:
+      # An open port is the signal (Tomcat opens connectors last).
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 30s
+    depends_on:
+      gateway-init: {condition: service_completed_successfully}
+      gateway-postgres: {condition: service_healthy}
+      gateway-redis: {condition: service_healthy}
+      gateway-redis-replica: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+
+  broker-postgres:
+    <<: *postgres
+    environment:
+      POSTGRES_USER: broker
+      POSTGRES_DB: broker
+      POSTGRES_PASSWORD_FILE: /secrets/postgres/password
+    volumes:
+      - broker-db:/var/lib/postgresql
+      - type: volume
+        source: secrets
+        target: /secrets/postgres
+        read_only: true
+        volume: {subpath: broker-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U broker -d broker"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [broker-stores]
+    depends_on: *depends-init
+
+  broker-redis:
+    <<: *redis
+    command: ["redis-server", "/secrets/redis/redis.conf"]
+    volumes:
+      - broker-redis:/data
+      - type: volume
+        source: secrets
+        target: /secrets/redis
+        read_only: true
+        volume: {subpath: broker-redis}
+    networks: [broker-stores]
+    depends_on: *depends-init
+
+  mcp-credential-broker:
+    <<: *java
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.0.0}
+    mem_limit: ${BROKER_MEM_LIMIT:-1g}
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: optional:configtree:/secrets/broker/env/
+      MCP_OIDC_ISSUER: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth/realms/mcp
+      MCP_OIDC_JWKS_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/certs
+      MCP_OIDC_AUDIENCE: mcp-credential-broker
+      # Token endpoint for systems of type token-exchange and the exchange of the portal's tokens: the internal address.
+      BROKER_BFFTOKEN_TOKENURL: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/token
+      # Audiences an administrator may name in exchangeAudience of a token-exchange system: the one the realm defines.
+      BROKER_TOKENEXCHANGE_ALLOWEDAUDIENCES: opensearch
+      # Fresh MFA of the administrator for writes of /v1/admin/systems: the same acr as at the gateway.
+      BROKER_BFFTOKEN_MFAACRVALUES: mfa
+      MCP_GATEWAY_JWKS_URI: https://mcp-gateway.internal:8443/.well-known/jwks.json
+      MCP_GATEWAY_TLS_NAME: mcp-gateway.internal
+      MCP_BAO_ADDR: https://openbao.internal:8200
+      MCP_PORTAL_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      MCP_REDIS_HOST: broker-redis
+      MCP_DB_URL: jdbc:postgresql://broker-postgres:5432/broker
+      MCP_DB_USER: broker
+      MCP_TLS_KEYSTORE: /certs/own/keystore.p12
+      MCP_TLS_TRUSTSTORE: /certs/trust/broker-truststore.p12
+    volumes:
+      - type: volume
+        source: secrets
+        target: /certs/own
+        read_only: true
+        volume: {subpath: pki/certs/mcp-credential-broker}
+      - type: volume
+        source: secrets
+        target: /certs/trust
+        read_only: true
+        volume: {subpath: pki/trust}
+      - type: volume
+        source: secrets
+        target: /secrets/broker/env
+        read_only: true
+        volume: {subpath: broker/env}
+    networks:
+      edge:
+        aliases: [mcp-credential-broker.internal]
+      secrets: {}
+      broker-stores: {}
+      egress: {}
+    healthcheck:
+      # mTLS-only listener: an accepted TCP connection means the application finished starting.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8443"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 15s
+    depends_on:
+      broker-postgres: {condition: service_healthy}
+      broker-redis: {condition: service_healthy}
+      openbao-unseal: {condition: service_healthy}
+      keycloak: {condition: service_healthy}
+
+  # The single-container "portal" image: the BFF with the single-page application inside.
+  portal:
+    <<: *java
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.0.0}
+    mem_limit: ${PORTAL_MEM_LIMIT:-1g}
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: optional:configtree:/secrets/portal/env/
+      PORTAL_PORT: "8080"
+      PORTAL_PUBLIC_BASE_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
+      # No discovery: the issuer is only compared with `iss`; the browser goes to the public address, the BFF uses the internal one.
+      PORTAL_OIDC_ISSUER_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth/realms/mcp
+      PORTAL_OIDC_AUTHORIZATION_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/auth/realms/mcp/protocol/openid-connect/auth
+      PORTAL_OIDC_TOKEN_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/token
+      PORTAL_OIDC_JWK_SET_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/certs
+      PORTAL_OIDC_USER_INFO_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/userinfo
+      PORTAL_OIDC_END_SESSION_URI: https://keycloak.internal:8443/auth/realms/mcp/protocol/openid-connect/logout
+      PORTAL_OIDC_CLIENT_ID: mcp-portal-bff
+      PORTAL_BROKER_URL: https://mcp-credential-broker.internal:8443
+      PORTAL_BROKER_TLS_NAME: mcp-credential-broker.internal
+      PORTAL_GATEWAY_ADMIN_URL: https://mcp-gateway.internal:8443
+      PORTAL_GATEWAY_ADMIN_TLS_NAME: mcp-gateway.internal
+      PORTAL_TLS_KEYSTORE: /certs/own/keystore.p12
+      PORTAL_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+      # X-Forwarded-* are trusted from nginx only: the entrypoint resolves this name to its address.
+      PORTAL_TRUSTED_PROXY_HOST: nginx
+      # Step-up (registering the Authenticator, administration): the level the realm reports in `acr` after password and OTP.
+      PORTAL_STEP_UP_ACR_VALUES: mfa
+      PORTAL_IGA_ADAPTER: keycloak-groups
+      PORTAL_IGA_CATALOG_FILE: /config/iga-catalog.yaml
+      PORTAL_CLIENT_CONFIGS_CLAUDE_CODE_CLIENT_ID: claude-code
+      PORTAL_CLIENT_CONFIGS_CLAUDE_CODE_CALLBACK_PORT: "${MCP_CLAUDE_CODE_CALLBACK_PORT:-33418}"
+    volumes:
+      - ./portal/iga-catalog.yaml:/config/iga-catalog.yaml:ro
+      - type: volume
+        source: secrets
+        target: /certs/own
+        read_only: true
+        volume: {subpath: pki/certs/mcp-portal-bff}
+      - type: volume
+        source: secrets
+        target: /certs/trust
+        read_only: true
+        volume: {subpath: pki/trust}
+      - type: volume
+        source: secrets
+        target: /secrets/portal/env
+        read_only: true
+        volume: {subpath: portal/env}
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/actuator/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+      start_period: 15s
+    depends_on:
+      <<: *depends-init
+      keycloak: {condition: service_healthy}
+      nginx: {condition: service_healthy}
+
+  # The Redis the MCP servers share for the one-time jti of the internal tokens. One account per server, added by
+  # `docker compose run --rm init issue <serverId>`.
+  servers-redis:
+    <<: *redis
+    command: ["redis-server", "/secrets/redis/redis.conf"]
+    volumes:
+      - servers-redis:/data
+      - type: volume
+        source: secrets
+        target: /secrets/redis
+        read_only: true
+        volume: {subpath: servers-redis}
+    networks: [servers]
+    depends_on: *depends-init
+
+networks:
+  public: {}
+  edge: {internal: true}
+  secrets: {internal: true}
+  servers: {internal: true}
+  keycloak-stores: {internal: true}
+  gateway-stores: {internal: true}
+  broker-stores: {internal: true}
+  egress: {}
+
+volumes:
+  secrets:
+  openbao-keys:
+  openbao-data:
+  keycloak-db:
+  gateway-db:
+  gateway-redis:
+  gateway-redis-replica:
+  broker-db:
+  broker-redis:
+  servers-redis:
