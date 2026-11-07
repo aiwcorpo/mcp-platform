@@ -51,16 +51,24 @@ A second `docker compose up -d` changes nothing: `init` keeps every generated va
     Open `https://<domain>/auth/realms/mcp/account`, sign in, and Keycloak asks for a new password and for an OTP (a code from an
     authenticator app). Then `https://<domain>/` is the portal. The administration of servers and policies asks for a fresh login with the OTP.
 
-The Keycloak administration console (`https://<domain>/auth/admin/`) answers only the networks in `nginx/keycloak-admin-allow.conf`
-(private networks by default). Its bootstrap account is `docker compose run --rm init show keycloak-admin`; create a named
+The Keycloak administration console (`https://<domain>/auth/admin/`) and the master realm answer only the networks in
+`nginx/keycloak-admin-allow.conf`, which ships with `127.0.0.1` only: add one `allow <network>;` line for the network your administrators
+come from, before `deny all;`, and run `docker compose restart nginx`. The rule also covers matrix-parameter variants such as
+`/auth/admin;x/`. The bootstrap account is `docker compose run --rm init show keycloak-admin`; create a named
 administrator there and delete the bootstrap account.
 
 ### Users and the two authenticators
 
-Every user enrolls an OTP at the first login (the required action CONFIGURE_TOTP is a default action of the realm). Step-up, which the
-administration and the portal's Authenticator need, accepts only users who have one: it never offers enrollment, so a password alone
-cannot reach the level `mfa`. A user therefore has two entries in the authenticator app: the OTP of the login, and the platform
+A user without an OTP enrolls one at the first login (CONFIGURE_TOTP is a default required action of the realm). From then on the OTP is
+asked after the password at every login, for every client including the AI clients, and before any required action: someone who knows
+only the password cannot reach the OTP setup page, neither through the account console nor through an application-initiated action
+(`kc_action=CONFIGURE_TOTP`), so cannot add a second OTP of their own. Step-up, which the administration and the portal's Authenticator
+need, takes the OTP of that login (or asks for it) and refuses a user who has none: it never offers enrollment, so a password alone cannot
+reach the level `mfa`. A user therefore has two entries in the authenticator app: the OTP of the login, and the platform
 Authenticator that the portal registers for confirming destructive actions.
+
+Passwords need 12 characters and may not equal the user name or e-mail, the last 5 passwords cannot be reused, and an account is locked
+after 10 failed attempts (`passwordPolicy` and `failureFactor` of the realm).
 
 Residual risk: until the first login, whoever knows a user's initial password enrolls the OTP. Give initial passwords out of band, or
 federate the users from your company directory (Keycloak, User federation) so that no initial password exists. Users get access to
@@ -145,21 +153,31 @@ The gateway certificate names the domain, so the pipeline connects to the same n
 
 - nginx: yours (`certs/`). After renewing it run `docker compose up -d` (init copies it) and `docker compose restart nginx`.
 - Internal: one CA (10 years) and certificates of 2 years for the gateway, broker, portal, Keycloak, OpenBao and every server. `init`
-  makes a certificate again when it expires within 30 days; restart the stack afterwards. Replacing the CA itself means deleting
+  makes a certificate again when it expires within 30 days; restart the stack afterwards. Pipeline certificates (`init ci`) are valid 90
+  days: run `docker compose run --rm init ci <serverId>` again before they expire (it renews when less than 30 days are left) and give the
+  new files to the pipeline. Replacing the CA itself means deleting
   `pki/` in the `secrets` volume and issuing every server certificate again.
 - `company-ca.crt` also goes into the JVM trust store of the gateway, broker and portal. Systems behind the broker that use the company
   CA need it in the broker's own trust store, which also decides which client certificates the broker accepts; set
-  `MCP_BROKER_TRUST_COMPANY_CA=true` for that.
+  `MCP_BROKER_TRUST_COMPANY_CA=true` for that, and read the consequence under Known limits first.
 
 ## OpenBao after a restart
 
 OpenBao starts sealed. `openbao-unseal` initialises it on the first start (one key share) and unseals it after every start of it, so the
-platform comes back by itself after a restart of the host. The unseal key and the root token are in the volume `openbao-keys`, mounted
-by that service only. The trade-off: whoever can read Docker volumes on the host can unseal OpenBao, so the host is the trust
-boundary, as it is for the other generated secrets. To keep the key off the host: back up `openbao-keys`, delete it
-from the host (`docker compose stop openbao-unseal && docker volume rm mcp-platform_openbao-keys`) and unseal by hand after each start with
+platform comes back by itself after a restart of the host. The unseal key is in the volume `openbao-keys`, mounted by that service only.
+The trade-off: whoever can read Docker volumes on the host can unseal OpenBao, so the host is the trust boundary, as it is for the other
+generated secrets. To keep the key off the host: back up `openbao-keys`, delete it from the host
+(`docker compose stop openbao-unseal && docker volume rm mcp-platform_openbao-keys`) and unseal by hand after each start with
 `bao operator unseal` from a shell on the `secrets` network. The broker then fails to start until someone does.
-The same service creates the policy, the Transit keys and the AppRole, and renews the broker's secret_id before it expires.
+
+The same service provisions OpenBao (policy, Transit keys, AppRole) with a token of the policy `mcp-provisioner`, which can manage mounts,
+policies and the broker's AppRole but read or write no secret and use no Transit key. The root token exists only until the first provisioning
+has worked with that token, then it is revoked and deleted; the provisioner token (period 768 h) is renewed at every provisioning, which
+runs at every start of the service and every 6 hours. A new root token, if you ever need one, comes from `bao operator generate-root` with
+the unseal key.
+
+The broker logs in to OpenBao with a role_id and a secret_id that it reads from its environment. That secret_id does not expire: the broker
+uses it again whenever its token ends, so a lifetime would only switch the broker off. Replacing it is a manual operation, not automated here.
 
 ## Backup
 
@@ -172,7 +190,7 @@ for db in gateway-postgres:gateway keycloak-postgres:keycloak broker-postgres:br
   docker compose exec -T "${db%%:*}" pg_dump -U "${db##*:}" "${db##*:}" > "${db##*:}.sql"
 done
 docker compose exec -e BAO_CACERT=/trust/ca.crt openbao-unseal sh -c \
-  'BAO_TOKEN=$(cat /keys/root-token) bao operator raft snapshot save /tmp/openbao.snap && cat /tmp/openbao.snap' > openbao.snap
+  'BAO_TOKEN=$(cat /keys/provisioner-token) bao operator raft snapshot save /tmp/openbao.snap && cat /tmp/openbao.snap' > openbao.snap
 docker run --rm -v mcp-platform_secrets:/s:ro -v mcp-platform_openbao-keys:/k:ro -v "$PWD":/b alpine tar czf /b/secrets.tgz -C / s k
 ```
 
@@ -196,6 +214,12 @@ can report a failure although the platform is fine, and `up -d` runs it again in
 - The gateway and the broker each have their own Redis, as asked. The broker publishes `credential.invalidated` on its Redis and the
   gateway subscribes on its own, so the gateway does not learn of a revoked credential at once; its cache keeps one for at most 60 s.
   Pointing both at one Redis closes the gap.
+- Any certificate of the company CA with CN `mcp-offboarding` can purge users and reset authenticators at the broker without a token,
+  if you set `MCP_BROKER_TRUST_COMPANY_CA=true`: the broker has one trust store for the certificates it accepts from clients and for the
+  systems it calls. Enable the flag only if your company CA does not let requesters choose the subject of a certificate. The broker needs a
+  separate outbound trust store; that is a limitation of the component, not of this bundle.
+- The broker and the MCP servers share the network `egress` (the Docker address pool of a host with many networks may not have room for a
+  second one).
 - The gateway's plain-http port 8080 and Keycloak's and the portal's are reachable on the networks they share with the services that do not
   need them (edge, and servers for the gateway): only nginx is meant to call them, nothing else is blocked.
 - The gateway has no setting for trusted proxies; it builds every address it hands out from `MCP_PUBLIC_URL`, never from `X-Forwarded-*`.
