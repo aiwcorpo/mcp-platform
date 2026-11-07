@@ -1,0 +1,21 @@
+# Entitlements that the portal lists under access requests (adapter keycloak-groups: a catalog from a file, no request flow).
+# The names are Keycloak groups of the realm in keycloak/realm-mcp.json. Keep the systems your installation has and add a
+# line per system when you add one. The adapter refuses to start with an empty catalog. Restart the portal after a change.
+entitlements:
+  jira: [mcp-jira-read, mcp-jira-write, mcp-jira-destructive]
+  confluence: [mcp-confluence-read, mcp-confluence-write]
+  gitlab: [mcp-gitlab-read, mcp-gitlab-write]
+  servicedesk: [mcp-servicedesk-read, mcp-servicedesk-write]
+  opensearch: [mcp-opensearch-read, mcp-opensearch-ops]
+descriptions:
+  mcp-jira-read: Read access to Jira issues and projects
+  mcp-jira-write: Create and update Jira issues
+  mcp-jira-destructive: Delete Jira issues
+  mcp-confluence-read: Read access to Confluence spaces
+  mcp-confluence-write: Create and edit Confluence pages
+  mcp-gitlab-read: Read access to GitLab projects
+  mcp-gitlab-write: Comments and merge requests in GitLab projects
+  mcp-servicedesk-read: Read access to service desk tickets
+  mcp-servicedesk-write: Add notes to service desk tickets
+  mcp-opensearch-read: Search access to OpenSearch indices
+  mcp-opensearch-ops: Cluster health and backend information of OpenSearch
