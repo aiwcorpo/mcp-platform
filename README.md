@@ -115,8 +115,8 @@ Servers are data of the gateway and the broker, added at run time. The example i
     MCP_EXAMPLE_URL=https://backend.corp.test              # the backend system, https
     ```
 
-    For a test stack with the stub backend of `mcp-server-template` also set `COMPOSE_PROFILES=stub`, `MCP_EXAMPLE_URL=http://stub-backend:18081`,
-    `MCP_EXAMPLE_ALLOW_PLAIN_HTTP=true` and `MCP_STUB_BACKEND_JAR=<path of mcp-stub-backend.jar>`. Then `docker compose up -d`.
+    For a test stack with the stub backend of `mcp-e2e` (`make stub-test` there builds it) also set `COMPOSE_PROFILES=stub`, `MCP_EXAMPLE_URL=http://stub-backend:18081`,
+    `MCP_EXAMPLE_ALLOW_PLAIN_HTTP=true` and `MCP_STUB_BACKEND_JAR=<path of mcp-e2e/stub-backend/target/mcp-stub-backend.jar>`. Then `docker compose up -d`.
 
 3. Register it. The portal (Administration) or the admin APIs do the same; the calls need a token of a fresh login with OTP
    (`auth_time` within 5 minutes, `acr` `mfa`) and the portal's client certificate, so the portal is the easy way. In order:

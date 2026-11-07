@@ -64,7 +64,7 @@ services:
     depends_on:
       servers-redis: {condition: service_healthy}
 
-  # Test stack only (profile "stub"): the stub backend of mcp-server-template, built there as mcp-stub-backend/target/mcp-stub-backend.jar.
+  # Test stack only (profile "stub"): the stub backend of mcp-e2e, built there as stub-backend/target/mcp-stub-backend.jar (make stub-test).
   # It accepts any credential and speaks plain http. Never on a production host.
   stub-backend:
     profiles: [stub]
