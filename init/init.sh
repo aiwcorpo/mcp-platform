@@ -4,6 +4,7 @@
 #
 #   init.sh                  every start: check the configuration, generate what is missing, keep what exists
 #   init.sh issue <id> [uid] certificate, Redis account and secrets of an MCP server; uid is the user the server image runs as (999)
+#   init.sh export <id>      tar on stdout with everything a server on another host needs (certs/, server.env); issues if needed
 #   init.sh ci <id>          client certificate mcp-registry-ci-<id> for the pipeline that registers the manifest of <id>
 #   init.sh show <what>      print one generated value: admin-password, keycloak-admin, client-secret <client>, ca,
 #                            ci-cert <id>, ci-key <id>
@@ -373,6 +374,44 @@ issue_server() {
   say "Next: add the service to your servers file (servers.example.yaml) and register it (README, Add an MCP server)."
 }
 
+# For a server on another host: its certificate, the truststore and an env file, as a tar on stdout (certs/keystore.p12,
+# certs/truststore.p12, server.env) to unpack into the server's deploy/ directory. Everything else on stdout would corrupt the tar,
+# so messages go to stderr. The Redis password is for the Redis that the server's own deploy/compose.yaml starts; the bundle's
+# servers-redis is not reachable from another host and gets no account.
+export_server() {
+  id="${1:-}"
+  valid_server_id "$id"
+  [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
+  mkdir -p "$STATE/servers/$id"
+  chmod 700 "$STATE/servers" "$STATE/servers/$id"
+  issue_cert "$id" both "DNS:$id.internal,DNS:$id" 0:0 "$PKI/certs/$id" >&2
+  [ -s "$STATE/servers/$id/remote-redis-password" ] || { openssl rand -hex 24 | tr -d '\n' > "$STATE/servers/$id/remote-redis-password"; chmod 400 "$STATE/servers/$id/remote-redis-password"; }
+  [ -s "$STATE/servers/$id/cursor-key" ] || { openssl rand -base64 32 | tr -d '\n' > "$STATE/servers/$id/cursor-key"; chmod 400 "$STATE/servers/$id/cursor-key"; }
+  gateway="https://$MCP_DOMAIN:${MCP_MTLS_PORT:-8443}"
+  work="$(mktemp -d)"
+  mkdir "$work/certs"
+  cp "$PKI/certs/$id/keystore.p12" "$work/certs/keystore.p12"
+  cp "$PKI/trust/truststore.p12" "$work/certs/truststore.p12"
+  chmod 755 "$work/certs"
+  chmod 644 "$work/certs/keystore.p12" "$work/certs/truststore.p12"
+  cat > "$work/server.env" <<ENVFILE
+MCP_TLS_STORE_PASSWORD=$(cat "$PKI/store-password")
+MCP_PAGING_CURSOR_KEY=$(cat "$STATE/servers/$id/cursor-key")
+MCP_REDIS_HOST=redis
+MCP_REDIS_PORT=6379
+MCP_REDIS_USER=$id
+MCP_REDIS_PASSWORD=$(cat "$STATE/servers/$id/remote-redis-password")
+MCP_GATEWAY_JWKS_URI=$gateway/.well-known/jwks.json
+MCP_GATEWAY_POLICY_DATA_URL=$gateway/internal/v1/policy-data
+MCP_CONNECT_URL=$MCP_PUBLIC_ORIGIN/connections?system={system}
+MCP_INTERNAL_URL=https://$id.internal:8443/mcp
+ENVFILE
+  chmod 600 "$work/server.env"
+  tar -C "$work" --owner=0 --group=0 --numeric-owner -cf - certs server.env
+  rm -rf "$work"
+  say "exported $id: unpack the tar in the server's deploy/ directory, add the URL of its backend system to server.env" >&2
+}
+
 issue_ci() {
   id="${1:-}"
   valid_server_id "$id"
@@ -535,6 +574,7 @@ case "${1:-bootstrap}" in
   bootstrap) bootstrap ;;
   issue) shift; issue_server "$@" ;;
   ci) shift; issue_ci "$@" ;;
+  export) shift; export_server "$@" ;;
   show) shift; show "$@" ;;
   openbao) openbao ;;
   *) die "unknown command $1 (see the top of init/init.sh)" ;;

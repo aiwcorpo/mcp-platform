@@ -73,6 +73,7 @@ services:
       MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
       MCP_ADMIN_USERNAME: ${MCP_ADMIN_USERNAME:-mcp-admin}
       MCP_BROKER_TRUST_COMPANY_CA: ${MCP_BROKER_TRUST_COMPANY_CA:-false}
+      MCP_MTLS_PORT: ${MCP_MTLS_PORT:-8443}
     volumes:
       - secrets:/secrets
       - ${MCP_CERTS_DIR:-./certs}:/operator-certs:ro
@@ -134,10 +135,11 @@ services:
       retries: 20
     depends_on: *depends-init
 
-  # Off by default (profile "ci"): TCP passthrough of the gateway's mTLS port for a pipeline outside this host.
-  nginx-ci:
+  # TCP passthrough of the gateway's mTLS port, for MCP servers and the registration pipeline on other hosts. nginx does not
+  # terminate TLS: the gateway still demands a client certificate of the internal CA (init export, init ci). Open this port in the
+  # firewall only for those hosts.
+  nginx-mtls:
     <<: [*third-party, *hardened]
-    profiles: [ci]
     image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     restart: unless-stopped
     user: "101:101"
@@ -147,7 +149,7 @@ services:
     volumes:
       - ./nginx/stream.conf:/etc/nginx/stream.conf:ro
     ports:
-      - ${MCP_CI_BIND:-127.0.0.1}:${MCP_CI_PORT:-8443}:8443
+      - ${MCP_MTLS_BIND:-0.0.0.0}:${MCP_MTLS_PORT:-8443}:8443
     networks: [public, edge]
     depends_on: *depends-init
 
@@ -435,6 +437,8 @@ services:
         aliases: [mcp-gateway.internal]
       servers:
         aliases: [mcp-gateway.internal]
+      # Servers on other hosts: the gateway calls them over this network.
+      egress: {}
       gateway-stores: {}
     healthcheck:
       # An open port is the signal (Tomcat opens connectors last).

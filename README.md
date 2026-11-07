@@ -1,7 +1,8 @@
 # The MCP platform on one Docker host
 
 Gateway, credential broker, portal, Keycloak and OpenBao with their databases, behind one nginx, as one Compose project on one Linux
-host. Only nginx publishes ports: 443 for all user traffic and 80, which redirects to https. Every internal certificate, password
+host. Only two nginx containers publish ports: 443 for all user traffic and 80, which redirects to https, and 8443, a TCP passthrough
+to the gateway's mTLS port for MCP servers and pipelines on other hosts. Every internal certificate, password
 and key is generated on the first start and kept in Docker volumes. MCP servers are added afterwards (see below).
 
 ## Prerequisites
@@ -80,16 +81,17 @@ servers, add your own in the console.
 
 | Service | What | Networks |
 | --- | --- | --- |
-| `nginx` | TLS, routes `/auth`, `/api`, `/mcp`, `/s/`, `/`; the only published ports | public, edge |
+| `nginx` | TLS, routes `/auth`, `/api`, `/mcp`, `/s/`, `/`; publishes 443 and 80 | public, edge |
+| `nginx-mtls` | TCP passthrough of the gateway's mTLS port for servers and pipelines on other hosts; publishes 8443 | public, edge |
 | `keycloak`, `keycloak-postgres` | identity provider, production mode, realm `mcp` | edge, keycloak-stores |
-| `gateway`, `gateway-postgres`, `gateway-redis`, `gateway-redis-replica` | MCP gateway (the replica is required in production) | edge, servers, gateway-stores |
+| `gateway`, `gateway-postgres`, `gateway-redis`, `gateway-redis-replica` | MCP gateway (the replica is required in production) | edge, servers, egress, gateway-stores |
 | `mcp-credential-broker`, `broker-postgres`, `broker-redis` | credential broker | edge, secrets, broker-stores, egress |
 | `openbao`, `openbao-unseal` | secret store | secrets (reachable by the broker only) |
 | `portal` | BFF with the single-page application | edge |
 | `servers-redis` | Redis for the one-time jti of MCP servers | servers |
 | `init`, `gateway-init` | one-shot setup (the second one is the gateway's own `init` command) | |
 
-All networks are internal except `public` (nginx) and `egress` (the broker, for the systems behind it). The gateway, broker and portal
+All networks are internal except `public` (the two nginx containers) and `egress` (the broker, for the systems behind it, and the gateway, for servers on other hosts). The gateway, broker and portal
 reach Keycloak at `https://keycloak.internal:8443` with a certificate of the internal CA, so token checks and token exchange never
 depend on the public certificate; the domain name also resolves to nginx inside Docker. Tokens carry the public issuer
 `https://<domain>/auth/realms/mcp`.
@@ -122,7 +124,7 @@ Servers are data of the gateway and the broker, added at run time. The example i
     2. Gateway, server: `POST /admin/v1/servers` with `serverId` `mcp-example`, `internalUrl` `https://mcp-example.internal:8443/mcp`,
        and the credential type of the system.
     3. The pipeline registers the manifest of the reviewed build, `PUT /admin/v1/registry/servers/mcp-example`, with the certificate from
-       `init ci` (see Pipeline outside the host). Tools that only read are approved by that call.
+       `init ci` (see MCP server on another host, step 5). Tools that only read are approved by that call.
     4. An administrator approves the policies (`POST .../policies/approve` with the pending `policiesHash`) and the remaining tools.
     5. Groups of the system in Keycloak, and the scope mapping (Administration, Scope mapping).
 
@@ -134,13 +136,39 @@ Servers are data of the gateway and the broker, added at run time. The example i
    entries go with it), and `DELETE /v1/admin/systems/example` in the broker (the users' connections and the client secret go with it).
 2. Remove the service from `servers.yaml` and run `docker compose up -d --remove-orphans`, or `docker compose rm -sf mcp-example`.
 
-### Pipeline outside the host
+### MCP server on another host
 
-A pipeline that registers manifests from another host needs the gateway's mTLS port. It is off by default; `COMPOSE_PROFILES=ci` in
-`.env` starts a second nginx container that passes TCP port `MCP_CI_PORT` (8443) through to it, without terminating TLS: the gateway
-still verifies the client certificate against the internal CA. Restrict it with `MCP_CI_BIND` and a firewall to the pipeline's network.
+The gateway's mTLS port is published by a second nginx container (`nginx-mtls`) on `MCP_MTLS_PORT` (8443), bound to `MCP_MTLS_BIND`
+(0.0.0.0). nginx does not terminate TLS there: the gateway demands a client certificate issued by the platform's internal CA, so only
+holders of one get in. The port is open to whoever can reach it at the network level, so open it in the firewall only for the hosts of
+the MCP servers and the pipeline.
+
+1. On the platform host, export what the server needs and copy it to the server host:
+
+    ```bash
+    docker compose run --rm -T init export mcp-example > mcp-example.tar      # issues the certificate if there is none
+    scp mcp-example.tar server-host:
+    ```
+
+2. On the server host, in the `deploy/` directory of the server (its `compose.yaml` starts the server and its own Redis; the bundle's
+   `servers-redis` cannot be used from another host):
+
+    ```bash
+    tar xf ~/mcp-example.tar        # certs/keystore.p12, certs/truststore.p12, server.env
+    ```
+
+   `server.env` has the passwords and keys, the Redis password of the server's own Redis, the gateway addresses
+   (`https://<domain>:<MCP_MTLS_PORT>/...`, the gateway certificate names the domain), `MCP_CONNECT_URL` and `MCP_INTERNAL_URL`. Only
+   the URL of the backend system is missing: add it (`MCP_EXAMPLE_URL=...` for this server). Keep `server.env` readable by you only.
+3. Start it: `docker compose up -d`. It publishes 8443 for the gateway; open that port in the server host's firewall for the platform
+   host only.
+4. Register it in the portal (Administration, Servers) with the internal URL `https://<host name or IP of the server host>:8443/mcp`.
+   The gateway pins the certificate name (`mcp-example.internal`), not the address, so an IP is fine. The system in the broker and the
+   groups are as for a server on the platform host (Add an MCP server, step 3).
+5. The pipeline registers the manifest through port 8443 with the client certificate of that server (`init ci`):
 
 ```bash
+docker compose run --rm init ci mcp-example
 docker compose run --rm -T init show ci-cert mcp-example > ci.crt
 docker compose run --rm -T init show ci-key mcp-example  > ci.key && chmod 600 ci.key
 docker compose run --rm -T init show ca > internal-ca.crt
@@ -148,7 +176,8 @@ curl --cacert internal-ca.crt --cert ci.crt --key ci.key -X PUT --data-binary @m
   -H 'Content-Type: application/json' https://<domain>:8443/admin/v1/registry/servers/mcp-example
 ```
 
-The gateway certificate names the domain, so the pipeline connects to the same name users use.
+The gateway certificate names the domain, so the pipeline connects to the same name users use. A server keeps working only while the
+gateway can reach its address: the gateway has a route out through the `egress` network.
 
 ## Certificates
 
