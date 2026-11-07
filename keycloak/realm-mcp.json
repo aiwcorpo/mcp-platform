@@ -1282,7 +1282,7 @@
     },
     {
       "alias": "browser-mcp level 2",
-      "description": "OTP",
+      "description": "OTP; a user without an OTP credential fails here instead of enrolling one",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
@@ -1296,11 +1296,66 @@
           "authenticatorConfig": "mcp-loa-2"
         },
         {
+          "requirement": "CONDITIONAL",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "browser-mcp otp"
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "browser-mcp otp missing"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mcp otp",
+      "description": "OTP of a user who has one",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-user-configured"
+        },
+        {
           "requirement": "REQUIRED",
           "priority": 20,
           "userSetupAllowed": false,
           "authenticatorFlow": false,
           "authenticator": "auth-otp-form"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mcp otp missing",
+      "description": "Level 2 for a user without OTP: refused",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-sub-flow-executed",
+          "authenticatorConfig": "mcp-otp-not-done"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "deny-access-authenticator",
+          "authenticatorConfig": "mcp-no-otp-message"
         }
       ]
     }
@@ -1319,6 +1374,19 @@
         "loa-condition-level": "2",
         "loa-max-age": "0"
       }
+    },
+    {
+      "alias": "mcp-otp-not-done",
+      "config": {
+        "flow_to_check": "browser-mcp otp",
+        "check_result": "not-executed"
+      }
+    },
+    {
+      "alias": "mcp-no-otp-message",
+      "config": {
+        "denyErrorMessage": "A second factor is required and none is configured for this account."
+      }
     }
   ],
   "browserFlow": "browser-mcp",
@@ -1331,12 +1399,20 @@
   "maxDeltaTimeSeconds": 43200,
   "requiredActions": [
     {
+      "alias": "UPDATE_PASSWORD",
+      "name": "Update Password",
+      "providerId": "UPDATE_PASSWORD",
+      "enabled": true,
+      "defaultAction": false,
+      "priority": 10
+    },
+    {
       "alias": "CONFIGURE_TOTP",
       "name": "Configure OTP",
       "providerId": "CONFIGURE_TOTP",
       "enabled": true,
-      "defaultAction": false,
-      "priority": 10
+      "defaultAction": true,
+      "priority": 20
     }
   ]
 }
