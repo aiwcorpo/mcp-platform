@@ -75,7 +75,7 @@ services:
       MCP_BROKER_TRUST_COMPANY_CA: ${MCP_BROKER_TRUST_COMPANY_CA:-false}
     volumes:
       - secrets:/secrets
-      - ./certs:/operator-certs:ro
+      - ${MCP_CERTS_DIR:-./certs}:/operator-certs:ro
       - ./init/init.sh:/init/init.sh:ro
     # Reaches the servers' Redis to load the account of a new MCP server.
     networks: [servers]
@@ -147,7 +147,7 @@ services:
     volumes:
       - ./nginx/stream.conf:/etc/nginx/stream.conf:ro
     ports:
-      - ${MCP_CI_BIND:-0.0.0.0}:${MCP_CI_PORT:-8443}:8443
+      - ${MCP_CI_BIND:-127.0.0.1}:${MCP_CI_PORT:-8443}:8443
     networks: [public, edge]
     depends_on: *depends-init
 
@@ -269,7 +269,6 @@ services:
     tmpfs: ["/tmp"]
     environment:
       BAO_ADDR: https://openbao.internal:8200
-      BAO_SECRET_ID_TTL: ${MCP_BAO_SECRET_ID_TTL:-720h}
     volumes:
       - openbao-keys:/keys
       - ./init/init.sh:/init/init.sh:ro

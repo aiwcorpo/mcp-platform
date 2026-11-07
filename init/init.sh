@@ -67,10 +67,15 @@ value() {
 
 # ---- certificates
 
-# issue_cert <name> <serverAuth|clientAuth|both> <subjectAltName list> <owner> <dir>
-# The certificate is made again when it is missing, expires within 30 days, or the names or the CA changed.
+# issue_cert <name> <serverAuth|clientAuth|both> <subjectAltName list> <owner> <dir> [days]
+# The certificate is made again when it is missing, expires within 30 days, or the names or the CA changed. A directory that
+# holds the certificate of another name is never overwritten.
 issue_cert() {
-  name="$1"; role="$2"; sans="$3"; owner="$4"; d="$5"
+  name="$1"; role="$2"; sans="$3"; owner="$4"; d="$5"; days="${6:-730}"
+  if [ -f "$d/tls.crt" ]; then
+    cn="$(openssl x509 -in "$d/tls.crt" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')"
+    [ "$cn" = "$name" ] || die "$d holds the certificate of $cn, not of $name"
+  fi
   case "$role" in
     serverAuth) eku="serverAuth" ;;
     clientAuth) eku="clientAuth" ;;
@@ -89,7 +94,7 @@ issue_cert() {
   openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$d/tls.key" 2>/dev/null
   openssl req -new -key "$d/tls.key" -subj "/O=MCP platform/CN=$name" -out "$d/tls.csr"
   openssl x509 -req -in "$d/tls.csr" -CA "$PKI/ca/ca.crt" -CAkey "$PKI/ca/ca.key" -set_serial "0x$(openssl rand -hex 16)" \
-    -days 730 -sha256 -extfile "$d/ext.cnf" -out "$d/tls.crt" 2>/dev/null
+    -days "$days" -sha256 -extfile "$d/ext.cnf" -out "$d/tls.crt" 2>/dev/null
   STOREPW="$(cat "$PKI/store-password")" openssl pkcs12 -export -name "$name" -inkey "$d/tls.key" -in "$d/tls.crt" \
     -certfile "$PKI/ca/ca.crt" -passout env:STOREPW -out "$d/keystore.p12"
   cp "$PKI/ca/ca.crt" "$d/ca.crt"
@@ -170,10 +175,9 @@ check_configuration() {
     "") fail "MCP_DOMAIN is not set"; return ;;
     *[!a-z0-9.-]*|.*|-*|*.|*-) fail "MCP_DOMAIN $MCP_DOMAIN is not a DNS name in lower case"; return ;;
   esac
-  case "${MCP_PUBLIC_ORIGIN:-}" in
-    https://"$MCP_DOMAIN"|https://"$MCP_DOMAIN":[0-9]*) ;;
-    *) fail "MCP_PUBLIC_ORIGIN ${MCP_PUBLIC_ORIGIN:-} must be https://$MCP_DOMAIN, with :port when the https port is not 443"; return ;;
-  esac
+  quoted="$(printf '%s' "$MCP_DOMAIN" | sed 's/\./\\./g')"
+  printf '%s' "${MCP_PUBLIC_ORIGIN:-}" | grep -Eq "^https://$quoted(:[0-9]{1,5})?\$" \
+    || { fail "MCP_PUBLIC_ORIGIN ${MCP_PUBLIC_ORIGIN:-} must be https://$MCP_DOMAIN, with :port when the https port is not 443"; return; }
   case "${MCP_ADMIN_USERNAME:-}" in
     [a-z]*) printf '%s' "$MCP_ADMIN_USERNAME" | grep -Eq '^[a-z][a-z0-9._-]{2,30}$' || fail "MCP_ADMIN_USERNAME must be 3 to 31 characters of a-z 0-9 . _ -" ;;
     *) fail "MCP_ADMIN_USERNAME must start with a letter" ;;
@@ -317,7 +321,7 @@ servers_redis_acl() {
   cmds='-@all +get +set +setnx +getdel +getex +mget +del +unlink +exists +expire +pexpire +ttl +pttl +incr +incrby +decr +hset +hget +hdel +hgetall +hexists +hincrby +multi +exec +discard +ping +auth +hello +client|setname +client|setinfo +reset +quit'
   {
     echo "user default off resetkeys resetchannels -@all"
-    echo "user admin on >$(value servers-redis-admin) ~* &* +@all"
+    echo "user admin on >$(value servers-redis-admin) resetkeys resetchannels -@all +acl|load +auth +hello +ping +quit"
     for f in "$STATE"/servers/*/redis-password; do
       [ -f "$f" ] || continue
       id="$(basename "$(dirname "$f")")"
@@ -336,13 +340,20 @@ servers_redis_load() {
 
 # ---- MCP servers and the pipeline
 
+# The reserved system ids of mcp-contracts (ReservedSystemIds), also enforced by the gateway and the broker: mcp-<id> is the
+# name of a platform component, so a certificate for it must never be issued here.
 valid_server_id() {
   printf '%s' "$1" | grep -Eq '^mcp-[a-z][a-z0-9]{1,30}$' || die "$1 is not a server id (mcp-<system>, lower case letters and digits)"
+  case "${1#mcp-}" in
+    gateway|offboarding|portal|broker|prometheus|platform|admin|registry|adapter|internal|ci)
+      die "$1 is reserved: mcp-${1#mcp-} is the name of a platform component" ;;
+  esac
 }
 
 issue_server() {
   id="${1:-}"; uid="${2:-999}"
   valid_server_id "$id"
+  printf '%s' "$uid" | grep -Eq '^[0-9]+$' || die "the uid $uid is not a number"
   [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
   mkdir -p "$STATE/servers/$id"
   chmod 700 "$STATE/servers" "$STATE/servers/$id"
@@ -366,8 +377,8 @@ issue_ci() {
   id="${1:-}"
   valid_server_id "$id"
   [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
-  issue_cert "mcp-registry-ci-$id" clientAuth "" 0:0 "$PKI/ci/mcp-registry-ci-$id"
-  say "pipeline certificate for $id: docker compose run --rm -T init show ci-cert $id / ci-key $id / ca"
+  issue_cert "mcp-registry-ci-$id" clientAuth "" 0:0 "$PKI/ci/mcp-registry-ci-$id" 90
+  say "pipeline certificate for $id (valid 90 days, made again by this command when less than 30 are left): docker compose run --rm -T init show ci-cert $id / ci-key $id / ca"
 }
 
 show() {
@@ -403,12 +414,37 @@ openbao() {
     mv "$keys/unseal-key.tmp" "$keys/unseal-key" && mv "$keys/root-token.tmp" "$keys/root-token"
   }
 
-  epoch() { date -u -d "$(printf '%s' "$1" | sed 's/\.[0-9]*Z$//; s/Z$//; s/T/ /')" +%s 2>/dev/null || true; }
+  # What provisioning needs and nothing else: no read or write of any secret, no Transit use.
+  bootstrap_provisioner() {
+    [ -s "$keys/root-token" ] || return 1
+    root="$(cat "$keys/root-token")"
+    BAO_TOKEN="$root" bao policy write mcp-provisioner - >/dev/null <<'HCL' || return 1
+path "sys/mounts"   { capabilities = ["read"] }
+path "sys/mounts/*" { capabilities = ["create", "read", "update"] }
+path "sys/auth"     { capabilities = ["read"] }
+path "sys/auth/*"   { capabilities = ["create", "read", "update", "sudo"] }
+path "sys/policies/acl/*" { capabilities = ["create", "read", "update"] }
+path "auth/approle/role/mcp-credential-broker"   { capabilities = ["create", "read", "update"] }
+path "auth/approle/role/mcp-credential-broker/*" { capabilities = ["create", "read", "update", "delete"] }
+path "transit/keys/mcp-credential-broker" { capabilities = ["create", "read", "update"] }
+path "transit/keys/mcp-authenticators"    { capabilities = ["create", "read", "update"] }
+path "sys/storage/raft/snapshot" { capabilities = ["read"] }
+HCL
+    out="$(BAO_TOKEN="$root" bao token create -orphan -policy=mcp-provisioner -period=768h -display-name=provisioner -format=json 2>/dev/null)" || return 1
+    tok="$(printf '%s' "$out" | sed -n 's/.*"client_token": *"\([^"]*\)".*/\1/p' | head -1)"
+    [ -n "$tok" ] || return 1
+    printf '%s\n' "$tok" > "$keys/provisioner-token.tmp" && mv "$keys/provisioner-token.tmp" "$keys/provisioner-token"
+  }
 
-  # Idempotent: creates what is missing, rewrites the policy, never touches Transit keys or stored secrets.
+  # Idempotent: creates what is missing, rewrites the policy, never touches Transit keys or stored secrets. Runs with the
+  # token of the provisioner policy; the root token only creates that token and is revoked once provisioning has worked with it.
   provision() {
     export BAO_TOKEN
-    BAO_TOKEN="$(cat "$keys/root-token")"
+    if ! [ -s "$keys/provisioner-token" ] || ! BAO_TOKEN="$(cat "$keys/provisioner-token")" bao token lookup >/dev/null 2>&1; then
+      bootstrap_provisioner || return 1
+    fi
+    BAO_TOKEN="$(cat "$keys/provisioner-token")"
+    bao token renew >/dev/null 2>&1 || return 1
     role_id="$(cat /approle/role-id)"
     secret_id="$(cat /approle/secret-id)"
     bao secrets list -format=json | grep -q '"secret/"' || bao secrets enable -path=secret -version=2 kv >/dev/null || return 1
@@ -432,33 +468,16 @@ path "transit/encrypt/mcp-authenticators" { capabilities = ["update"] }
 path "transit/decrypt/mcp-authenticators" { capabilities = ["update"] }
 HCL
     bao auth list -format=json | grep -q '"approle/"' || bao auth enable approle >/dev/null || return 1
-    bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h \
-      secret_id_ttl="${BAO_SECRET_ID_TTL:-720h}" >/dev/null || return 1
+    # The broker keeps one secret_id and logs in with it whenever its token ends, so the secret_id does not expire. Replacing
+    # it is a decision of the operator (README, Rotate the broker's secret_id).
+    bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h >/dev/null || return 1
     bao write auth/approle/role/mcp-credential-broker/role-id role_id="$role_id" >/dev/null || return 1
-
     lookup="$(printf '%s' "$secret_id" | bao write -format=json auth/approle/role/mcp-credential-broker/secret-id/lookup secret_id=- 2>/dev/null || true)"
-    # The broker keeps one secret_id and logs in with it whenever its token ends. It is recreated, with the same value, when
-    # less than half of its lifetime is left, so that it never runs out.
-    if printf '%s' "$lookup" | grep -q '"secret_id_accessor"'; then
-      created="$(epoch "$(printf '%s' "$lookup" | sed -n 's/.*"creation_time": *"\([^"]*\)".*/\1/p' | head -1)")"
-      expires="$(epoch "$(printf '%s' "$lookup" | sed -n 's/.*"expiration_time": *"\([^"]*\)".*/\1/p' | head -1)")"
-      now="$(date -u +%s)"
-      if [ -n "$created" ] && [ -n "$expires" ] && [ $(( (expires - now) * 2 )) -lt $(( expires - created )) ]; then
-        accessor="$(printf '%s' "$lookup" | sed -n 's/.*"secret_id_accessor": *"\([^"]*\)".*/\1/p' | head -1)"
-        printf '%s' "$accessor" | bao write auth/approle/role/mcp-credential-broker/secret-id-accessor/destroy secret_id_accessor=- >/dev/null || return 1
-        lookup=""
-        say "openbao-unseal: broker secret_id renewed (less than half of its lifetime was left)"
-      fi
-    fi
     if ! printf '%s' "$lookup" | grep -q '"secret_id_accessor"'; then
-      add_secret_id() { printf '%s' "$secret_id" | bao write auth/approle/role/mcp-credential-broker/custom-secret-id secret_id=- >/dev/null 2>&1; }
-      if ! add_secret_id; then
-        # An expired secret_id stays registered until the tidy job removes it; the same value cannot be created before that.
-        bao write -f auth/approle/tidy/secret-id >/dev/null 2>&1 || true
-        added=0
-        for _ in $(seq 30); do sleep 1; if add_secret_id; then added=1; break; fi; done
-        [ "$added" = 1 ] || return 1
-      fi
+      printf '%s' "$secret_id" | bao write auth/approle/role/mcp-credential-broker/custom-secret-id secret_id=- >/dev/null || return 1
+    fi
+    if [ -s "$keys/root-token" ]; then
+      BAO_TOKEN="$(cat "$keys/root-token")" bao token revoke -self >/dev/null 2>&1 && rm -f "$keys/root-token" && say "openbao-unseal: root token revoked"
     fi
     unset BAO_TOKEN
     return 0

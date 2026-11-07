@@ -1083,6 +1083,18 @@
       ],
       "optionalClientScopes": [],
       "description": "Audience of tokens accepted by OpenSearch (token-exchange credential type). No flows."
+    },
+    {
+      "clientId": "admin-cli",
+      "name": "${client_admin-cli}",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": false,
+      "protocol": "openid-connect"
     }
   ],
   "components": {
@@ -1258,7 +1270,7 @@
     },
     {
       "alias": "browser-mcp level 1",
-      "description": "Password",
+      "description": "Password, then the OTP of a user who has one (before any required action or application-initiated action)",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
@@ -1277,12 +1289,42 @@
           "userSetupAllowed": false,
           "authenticatorFlow": false,
           "authenticator": "auth-username-password-form"
+        },
+        {
+          "requirement": "CONDITIONAL",
+          "priority": 30,
+          "userSetupAllowed": false,
+          "authenticatorFlow": true,
+          "flowAlias": "browser-mcp level 1 otp"
+        }
+      ]
+    },
+    {
+      "alias": "browser-mcp level 1 otp",
+      "description": "OTP of a user who has one; a user without one is not asked, and enrolls through the required action",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-user-configured"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "auth-otp-form"
         }
       ]
     },
     {
       "alias": "browser-mcp level 2",
-      "description": "OTP; a user without an OTP credential fails here instead of enrolling one",
+      "description": "Second factor: asked here unless this login already used an OTP at level 1; a user without an OTP is refused. The last element makes a flow whose conditional parts were all skipped succeed (an empty flow fails).",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
@@ -1308,16 +1350,31 @@
           "userSetupAllowed": false,
           "authenticatorFlow": true,
           "flowAlias": "browser-mcp otp missing"
+        },
+        {
+          "requirement": "REQUIRED",
+          "priority": 40,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "allow-access-authenticator"
         }
       ]
     },
     {
       "alias": "browser-mcp otp",
-      "description": "OTP of a user who has one",
+      "description": "OTP at level 2, when this login has not used one yet",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
       "authenticationExecutions": [
+        {
+          "requirement": "REQUIRED",
+          "priority": 5,
+          "userSetupAllowed": false,
+          "authenticatorFlow": false,
+          "authenticator": "conditional-credential",
+          "authenticatorConfig": "mcp-otp-unused"
+        },
         {
           "requirement": "REQUIRED",
           "priority": 10,
@@ -1336,7 +1393,7 @@
     },
     {
       "alias": "browser-mcp otp missing",
-      "description": "Level 2 for a user without OTP: refused",
+      "description": "Level 2 without any OTP used in this login: refused",
       "providerId": "basic-flow",
       "topLevel": false,
       "builtIn": false,
@@ -1346,8 +1403,8 @@
           "priority": 10,
           "userSetupAllowed": false,
           "authenticatorFlow": false,
-          "authenticator": "conditional-sub-flow-executed",
-          "authenticatorConfig": "mcp-otp-not-done"
+          "authenticator": "conditional-credential",
+          "authenticatorConfig": "mcp-otp-unused"
         },
         {
           "requirement": "REQUIRED",
@@ -1376,22 +1433,22 @@
       }
     },
     {
-      "alias": "mcp-otp-not-done",
-      "config": {
-        "flow_to_check": "browser-mcp otp",
-        "check_result": "not-executed"
-      }
-    },
-    {
       "alias": "mcp-no-otp-message",
       "config": {
         "denyErrorMessage": "A second factor is required and none is configured for this account."
+      }
+    },
+    {
+      "alias": "mcp-otp-unused",
+      "config": {
+        "credentials": "otp",
+        "included": "false"
       }
     }
   ],
   "browserFlow": "browser-mcp",
   "permanentLockout": false,
-  "failureFactor": 30,
+  "failureFactor": 10,
   "waitIncrementSeconds": 60,
   "minimumQuickLoginWaitSeconds": 60,
   "maxFailureWaitSeconds": 900,
@@ -1414,5 +1471,6 @@
       "defaultAction": true,
       "priority": 20
     }
-  ]
+  ],
+  "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(5)"
 }
