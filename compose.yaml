@@ -160,7 +160,7 @@ services:
   # the database's. Secrets of the realm and the bootstrap administrator come from the file init wrote.
   keycloak:
     <<: [*third-party, *hardened]
-    image: ${MCP_THIRD_PARTY_REGISTRY:-quay.io/keycloak}/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
+    image: &keycloak-image ${MCP_THIRD_PARTY_REGISTRY:-quay.io/keycloak}/keycloak:26.8.1@sha256:a78d6b79572168cb25886b80a8b5b8d4ed4390743e3eecb810538683e209dd6b
     restart: unless-stopped
     entrypoint: ["/bin/bash", "-c", "set -a; . /secrets/env; set +a; exec /opt/keycloak/bin/kc.sh start --import-realm"]
     environment:
@@ -210,6 +210,31 @@ services:
     depends_on:
       <<: *depends-init
       keycloak-postgres: {condition: service_healthy}
+
+  # Settings the realm import cannot give (keycloak/configure.sh): administrators of the mcp realm manage its users and groups,
+  # and the master realm asks every administrator for an OTP. Runs once; later starts only report.
+  keycloak-config:
+    <<: [*third-party, *hardened]
+    image: *keycloak-image
+    entrypoint: ["/bin/bash", "/configure.sh"]
+    restart: "no"
+    read_only: true
+    tmpfs: ["/tmp"]
+    volumes:
+      - ./keycloak/configure.sh:/configure.sh:ro
+      - type: volume
+        source: secrets
+        target: /secrets
+        read_only: true
+        volume: {subpath: keycloak}
+      - type: volume
+        source: secrets
+        target: /state
+        volume: {subpath: keycloak-config}
+    networks: [edge]
+    depends_on:
+      <<: *depends-init
+      keycloak: {condition: service_healthy}
 
   # Sealed after every start. openbao-unseal initialises it once, unseals it after every start and keeps it unsealed
   # (README, OpenBao after a restart).

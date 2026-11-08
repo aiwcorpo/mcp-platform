@@ -296,6 +296,8 @@ KC_CLIENT_MCP_CREDENTIAL_BROKER_SECRET=$(value kc-client-mcp-credential-broker)
 KC_CLIENT_MCP_GATEWAY_ADMIN_SECRET=$(value kc-client-mcp-gateway-admin)
 KC_CLIENT_OPENSEARCH_SECRET=$(value kc-client-opensearch)
 E
+  # The marker of keycloak-config (keycloak/configure.sh) that its one run happened.
+  dir "$S/keycloak-config" 1000:0 700
 
   say
   ok "configuration, certificates and secrets are in place"

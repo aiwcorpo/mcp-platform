@@ -51,11 +51,20 @@ A second `docker compose up -d` changes nothing: `init` keeps every generated va
     Open `https://<domain>/auth/realms/mcp/account`, sign in, and Keycloak asks for a new password and for an OTP (a code from an
     authenticator app). Then `https://<domain>/` is the portal. The administration of servers and policies asks for a fresh login with the OTP.
 
-The Keycloak administration console (`https://<domain>/auth/admin/`) and the master realm answer only the networks in
-`nginx/keycloak-admin-allow.conf`, which ships with `127.0.0.1` only: add one `allow <network>;` line for the network your administrators
-come from, before `deny all;`, and run `docker compose restart nginx`. The rule also covers matrix-parameter variants such as
-`/auth/admin;x/`. The bootstrap account is `docker compose run --rm init show keycloak-admin`; create a named
-administrator there and delete the bootstrap account.
+Platform administrators (group `mcp-platform-admin`) manage users and groups in the console of their own realm,
+`https://<domain>/auth/admin/mcp/console/`, signing in with their usual account and OTP. The bootstrap account of the master realm
+(`docker compose run --rm init show keycloak-admin`) is for emergencies: the one-time `keycloak-config` service
+(`keycloak/configure.sh`) makes it enroll an OTP at its next login and gives the master realm the password policy and lockout of the
+realm `mcp`, with an OTP as a default required action for any administrator created there. Whoever signs in first with the bootstrap
+password enrolls that OTP, so do it right after the installation.
+
+Both consoles are open to every network, because every administrator there needs an OTP. To narrow them, list your networks in
+`nginx/keycloak-admin-allow.conf` (`allow <network>;` lines, then `deny all;`) and run `docker compose restart nginx`. The rule
+also covers matrix-parameter variants such as `/auth/admin;x/`.
+
+`keycloak-config` runs once and keeps a marker in the volume. If the bootstrap account already had an OTP before it ran, it cannot sign
+in and says so: give the group `mcp-platform-admin` the client roles `query-groups`, `query-users`, `view-users` and `manage-users` of
+`realm-management` in the console, then `docker compose run --rm keycloak-config mark-done`.
 
 ### Users and the two authenticators
 
