@@ -9,9 +9,10 @@
 #   public    nginx only: the network that lets Docker publish its ports
 #   edge      nginx, Keycloak, portal, gateway, broker; nginx also answers here under the platform's domain name
 #   secrets   OpenBao, its unseal service and the broker
-#   servers   gateway, MCP servers and the Redis they share (jti of the internal tokens)
+#   servers   gateway and the MCP servers that run in this Docker (plain http); nginx answers here under the platform's domain
+#             name, so that a server fetches the gateway's public keys through it
 #   *-stores  a database or Redis and its one client
-#   egress    the broker (and MCP servers, in servers.example.yaml): the way out to the systems behind them
+#   egress    the broker, the gateway (servers on other hosts) and MCP servers (servers.example.yaml): the way out
 #
 # Closed network: MCP_REGISTRY and MCP_THIRD_PARTY_REGISTRY in the .env file point the images to your registry.
 
@@ -73,13 +74,10 @@ services:
       MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
       MCP_ADMIN_USERNAME: ${MCP_ADMIN_USERNAME:-mcp-admin}
       MCP_BROKER_TRUST_COMPANY_CA: ${MCP_BROKER_TRUST_COMPANY_CA:-false}
-      MCP_MTLS_PORT: ${MCP_MTLS_PORT:-8443}
     volumes:
       - secrets:/secrets
       - ${MCP_CERTS_DIR:-./certs}:/operator-certs:ro
       - ./init/init.sh:/init/init.sh:ro
-    # Reaches the servers' Redis to load the account of a new MCP server.
-    networks: [servers]
 
   nginx:
     <<: [*third-party, *hardened]
@@ -128,29 +126,13 @@ services:
       # The domain name answers inside Docker too, so that a component that is given the public address reaches nginx.
       edge:
         aliases: ["${MCP_DOMAIN}"]
+      servers:
+        aliases: ["${MCP_DOMAIN}"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:$${MCP_HTTP_PORT}/__proxy/health"]
       interval: 5s
       timeout: 3s
       retries: 20
-    depends_on: *depends-init
-
-  # TCP passthrough of the gateway's mTLS port, for MCP servers and the registration pipeline on other hosts. nginx does not
-  # terminate TLS: the gateway still demands a client certificate of the internal CA (init export, init ci). Open this port in the
-  # firewall only for those hosts.
-  nginx-mtls:
-    <<: [*third-party, *hardened]
-    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
-    restart: unless-stopped
-    user: "101:101"
-    read_only: true
-    tmpfs: ["/tmp"]
-    command: ["nginx", "-c", "/etc/nginx/stream.conf", "-g", "daemon off;"]
-    volumes:
-      - ./nginx/stream.conf:/etc/nginx/stream.conf:ro
-    ports:
-      - ${MCP_MTLS_BIND:-0.0.0.0}:${MCP_MTLS_PORT:-8443}:8443
-    networks: [public, edge]
     depends_on: *depends-init
 
   keycloak-postgres:
@@ -326,7 +308,11 @@ services:
       MCP_ADMIN_MFA_ACR_VALUES: mfa
       MCP_TLS_KEYSTORE: /certs/own/keystore.p12
       MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+      # Optional PEM file with the CAs that sign certificates of MCP servers (trust mode "ca"), added to the JVM trust store, which
+      # already holds the public CAs and certs/company-ca.crt. Set MCP_SERVER_TRUSTED_CAS_FILE in .env to a file on this host.
+      MCP_SERVER_TRUSTED_CAS: ${MCP_SERVER_TRUSTED_CAS_FILE:+/certs/servers-ca.pem}
     volumes: &gateway-certs
+      - ${MCP_SERVER_TRUSTED_CAS_FILE:-/dev/null}:/certs/servers-ca.pem:ro
       - type: volume
         source: secrets
         target: /certs/own
@@ -419,6 +405,7 @@ services:
     mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
     environment: *gateway-env
     volumes:
+      - ${MCP_SERVER_TRUSTED_CAS_FILE:-/dev/null}:/certs/servers-ca.pem:ro
       - type: volume
         source: secrets
         target: /certs/own
@@ -434,7 +421,8 @@ services:
         target: /secrets/gateway
         read_only: true
         volume: {subpath: gw/gateway}
-    # 8080 (plain http, for nginx) and 8443 (mTLS: broker, MCP servers, admin API) are reachable on the internal networks only.
+    # 8080 (plain http, for nginx) and 8443 (mTLS: broker and portal) are reachable on the internal networks only. Servers are called
+    # as the operator entered them: by their own address, over TLS or (in this Docker) plain http.
     networks:
       edge:
         aliases: [mcp-gateway.internal]
@@ -612,21 +600,6 @@ services:
       keycloak: {condition: service_healthy}
       nginx: {condition: service_healthy}
 
-  # The Redis the MCP servers share for the one-time jti of the internal tokens. One account per server, added by
-  # `docker compose run --rm init issue <serverId>`.
-  servers-redis:
-    <<: *redis
-    command: ["redis-server", "/secrets/redis/redis.conf"]
-    volumes:
-      - servers-redis:/data
-      - type: volume
-        source: secrets
-        target: /secrets/redis
-        read_only: true
-        volume: {subpath: servers-redis}
-    networks: [servers]
-    depends_on: *depends-init
-
 networks:
   public: {}
   edge: {internal: true}
@@ -647,4 +620,3 @@ volumes:
   gateway-redis-replica:
   broker-db:
   broker-redis:
-  servers-redis:

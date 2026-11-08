@@ -3,11 +3,7 @@
 # as "openbao", in the "openbao-unseal" service (OpenBao image).
 #
 #   init.sh                  every start: check the configuration, generate what is missing, keep what exists
-#   init.sh issue <id> [uid] certificate, Redis account and secrets of an MCP server; uid is the user the server image runs as (999)
-#   init.sh export <id>      tar on stdout with everything a server on another host needs (certs/, server.env); issues if needed
-#   init.sh ci <id>          client certificate mcp-registry-ci-<id> for the pipeline that registers the manifest of <id>
-#   init.sh show <what>      print one generated value: admin-password, keycloak-admin, client-secret <client>, ca,
-#                            ci-cert <id>, ci-key <id>
+#   init.sh show <what>      print one generated value: admin-password, keycloak-admin, client-secret <client>, ca
 #   init.sh openbao          initialise, unseal and provision OpenBao, then keep it unsealed (never returns)
 #
 # Everything generated lives in the volume "secrets" (/secrets), laid out per consumer so that a service mounts only its own
@@ -232,9 +228,8 @@ bootstrap() {
   gw="$PKI/certs"
   mk "$gw"
 
-  # Names are the contract between the components: the gateway pins the SAN of every server it calls, and every client
-  # verifies the broker and the gateway by these names (compose.yaml sets the matching network aliases).
-  issue_cert mcp-gateway both "DNS:mcp-gateway.internal,DNS:mcp-gateway,DNS:$MCP_DOMAIN" 999:999 "$gw/mcp-gateway"
+  # Names are the contract between the components: every client verifies the broker and the gateway by these names (compose.yaml sets the matching network aliases).
+  issue_cert mcp-gateway both "DNS:mcp-gateway.internal,DNS:mcp-gateway" 999:999 "$gw/mcp-gateway"
   issue_cert mcp-credential-broker serverAuth "DNS:mcp-credential-broker.internal,DNS:mcp-credential-broker" 100:101 "$gw/mcp-credential-broker"
   issue_cert mcp-portal-bff clientAuth "" 100:101 "$gw/mcp-portal-bff"
   issue_cert keycloak serverAuth "DNS:keycloak.internal,DNS:keycloak,DNS:localhost,IP:127.0.0.1" 1000:0 "$gw/keycloak"
@@ -302,10 +297,6 @@ KC_CLIENT_MCP_GATEWAY_ADMIN_SECRET=$(value kc-client-mcp-gateway-admin)
 KC_CLIENT_OPENSEARCH_SECRET=$(value kc-client-opensearch)
 E
 
-  dir "$S/servers-redis" 0:0
-  servers_redis_acl
-  redis_conf servers-redis
-
   say
   ok "configuration, certificates and secrets are in place"
   say "      first platform administrator: $MCP_ADMIN_USERNAME"
@@ -322,109 +313,6 @@ maxmemory-policy noeviction
 E
 }
 
-# One account per MCP server: its jti keys only, no key scan, no scripts.
-servers_redis_acl() {
-  cmds='-@all +get +set +setnx +getdel +getex +mget +del +unlink +exists +expire +pexpire +ttl +pttl +incr +incrby +decr +hset +hget +hdel +hgetall +hexists +hincrby +multi +exec +discard +ping +auth +hello +client|setname +client|setinfo +reset +quit'
-  {
-    echo "user default off resetkeys resetchannels -@all"
-    echo "user admin on >$(value servers-redis-admin) resetkeys resetchannels -@all +acl|load +auth +hello +ping +quit"
-    for f in "$STATE"/servers/*/redis-password; do
-      [ -f "$f" ] || continue
-      id="$(basename "$(dirname "$f")")"
-      echo "user $id on >$(cat "$f") resetkeys ~jti:$id:* resetchannels $cmds"
-    done
-  } | put "$S/servers-redis/users.acl" 0:0 444
-}
-
-# RESP over /dev/tcp: the init image has no redis-cli. Returns 0 when the running Redis loaded the new account file.
-servers_redis_load() {
-  respond() { printf '*%d\r\n' "$#"; for a in "$@"; do printf '$%d\r\n%s\r\n' "${#a}" "$a"; done; }
-  reply="$( { respond AUTH admin "$(value servers-redis-admin)"; respond ACL LOAD; respond QUIT; } \
-    | bash -c 'exec 3<>/dev/tcp/servers-redis/6379 || exit 1; cat >&3; timeout 5 cat <&3' 2>/dev/null || true)"
-  [ "$(printf '%s' "$reply" | grep -c '^+OK')" -ge 3 ]
-}
-
-# ---- MCP servers and the pipeline
-
-# The reserved system ids of mcp-contracts (ReservedSystemIds), also enforced by the gateway and the broker: mcp-<id> is the
-# name of a platform component, so a certificate for it must never be issued here.
-valid_server_id() {
-  printf '%s' "$1" | grep -Eq '^mcp-[a-z][a-z0-9]{1,30}$' || die "$1 is not a server id (mcp-<system>, lower case letters and digits)"
-  case "${1#mcp-}" in
-    gateway|offboarding|portal|broker|prometheus|platform|admin|registry|adapter|internal|ci)
-      die "$1 is reserved: mcp-${1#mcp-} is the name of a platform component" ;;
-  esac
-}
-
-issue_server() {
-  id="${1:-}"; uid="${2:-999}"
-  valid_server_id "$id"
-  printf '%s' "$uid" | grep -Eq '^[0-9]+$' || die "the uid $uid is not a number"
-  [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
-  mkdir -p "$STATE/servers/$id"
-  chmod 700 "$STATE/servers" "$STATE/servers/$id"
-  issue_cert "$id" both "DNS:$id.internal,DNS:$id" "$uid:$uid" "$PKI/certs/$id"
-  [ -s "$STATE/servers/$id/redis-password" ] || { openssl rand -hex 24 | tr -d '\n' > "$STATE/servers/$id/redis-password"; chmod 400 "$STATE/servers/$id/redis-password"; }
-  [ -s "$STATE/servers/$id/cursor-key" ] || { openssl rand -base64 32 | tr -d '\n' > "$STATE/servers/$id/cursor-key"; chmod 400 "$STATE/servers/$id/cursor-key"; }
-  e="$S/servers/$id/env"
-  mk "$e"
-  chown "$uid:$uid" "$e"; chmod 755 "$e" "$S/servers" "$S/servers/$id"
-  put "$e/MCP_TLS_STORE_PASSWORD" "$uid:$uid" 400 < "$PKI/store-password"
-  put "$e/MCP_REDIS_PASSWORD" "$uid:$uid" 400 < "$STATE/servers/$id/redis-password"
-  put "$e/MCP_PAGING_CURSOR_KEY" "$uid:$uid" 400 < "$STATE/servers/$id/cursor-key"
-  servers_redis_acl
-  if servers_redis_load; then ok "redis account $id loaded"; else warn "servers-redis is not running: it loads the account when it starts"; fi
-  say
-  say "$id: certificate, Redis account and secrets are in the volume (owner uid $uid)."
-  say "Next: add the service to your servers file (servers.example.yaml) and register it (README, Add an MCP server)."
-}
-
-# For a server on another host: its certificate, the truststore and an env file, as a tar on stdout (certs/keystore.p12,
-# certs/truststore.p12, server.env) to unpack into the server's deploy/ directory. Everything else on stdout would corrupt the tar,
-# so messages go to stderr. The Redis password is for the Redis that the server's own deploy/compose.yaml starts; the bundle's
-# servers-redis is not reachable from another host and gets no account.
-export_server() {
-  id="${1:-}"
-  valid_server_id "$id"
-  [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
-  mkdir -p "$STATE/servers/$id"
-  chmod 700 "$STATE/servers" "$STATE/servers/$id"
-  issue_cert "$id" both "DNS:$id.internal,DNS:$id" 0:0 "$PKI/certs/$id" >&2
-  [ -s "$STATE/servers/$id/remote-redis-password" ] || { openssl rand -hex 24 | tr -d '\n' > "$STATE/servers/$id/remote-redis-password"; chmod 400 "$STATE/servers/$id/remote-redis-password"; }
-  [ -s "$STATE/servers/$id/cursor-key" ] || { openssl rand -base64 32 | tr -d '\n' > "$STATE/servers/$id/cursor-key"; chmod 400 "$STATE/servers/$id/cursor-key"; }
-  gateway="https://$MCP_DOMAIN:${MCP_MTLS_PORT:-8443}"
-  work="$(mktemp -d)"
-  mkdir "$work/certs"
-  cp "$PKI/certs/$id/keystore.p12" "$work/certs/keystore.p12"
-  cp "$PKI/trust/truststore.p12" "$work/certs/truststore.p12"
-  chmod 755 "$work/certs"
-  chmod 644 "$work/certs/keystore.p12" "$work/certs/truststore.p12"
-  cat > "$work/server.env" <<ENVFILE
-MCP_TLS_STORE_PASSWORD=$(cat "$PKI/store-password")
-MCP_PAGING_CURSOR_KEY=$(cat "$STATE/servers/$id/cursor-key")
-MCP_REDIS_HOST=redis
-MCP_REDIS_PORT=6379
-MCP_REDIS_USER=$id
-MCP_REDIS_PASSWORD=$(cat "$STATE/servers/$id/remote-redis-password")
-MCP_GATEWAY_JWKS_URI=$gateway/.well-known/jwks.json
-MCP_GATEWAY_POLICY_DATA_URL=$gateway/internal/v1/policy-data
-MCP_CONNECT_URL=$MCP_PUBLIC_ORIGIN/connections?system={system}
-MCP_INTERNAL_URL=https://$id.internal:8443/mcp
-ENVFILE
-  chmod 600 "$work/server.env"
-  tar -C "$work" --owner=0 --group=0 --numeric-owner -cf - certs server.env
-  rm -rf "$work"
-  say "exported $id: unpack the tar in the server's deploy/ directory, add the URL of its backend system to server.env" >&2
-}
-
-issue_ci() {
-  id="${1:-}"
-  valid_server_id "$id"
-  [ -f "$PKI/ca/ca.crt" ] || die "the platform is not initialised yet: run docker compose up -d first"
-  issue_cert "mcp-registry-ci-$id" clientAuth "" 0:0 "$PKI/ci/mcp-registry-ci-$id" 90
-  say "pipeline certificate for $id (valid 90 days, made again by this command when less than 30 are left): docker compose run --rm -T init show ci-cert $id / ci-key $id / ca"
-}
-
 show() {
   what="${1:-}"
   case "$what" in
@@ -432,9 +320,7 @@ show() {
     keycloak-admin) printf 'bootstrap-admin\n%s\n' "$(cat "$STATE/keycloak-bootstrap-admin")" ;;
     client-secret) [ -s "$STATE/kc-client-${2:-}" ] || die "no such client"; printf '%s\n' "$(cat "$STATE/kc-client-$2")" ;;
     ca) cat "$PKI/ca/ca.crt" ;;
-    ci-cert) valid_server_id "${2:-}"; cat "$PKI/ci/mcp-registry-ci-$2/tls.crt" ;;
-    ci-key) valid_server_id "${2:-}"; cat "$PKI/ci/mcp-registry-ci-$2/tls.key" ;;
-    *) die "show: admin-password | keycloak-admin | client-secret <client> | ca | ci-cert <id> | ci-key <id>" ;;
+    *) die "show: admin-password | keycloak-admin | client-secret <client> | ca" ;;
   esac
 }
 
@@ -577,9 +463,6 @@ HCL
 
 case "${1:-bootstrap}" in
   bootstrap) bootstrap ;;
-  issue) shift; issue_server "$@" ;;
-  ci) shift; issue_ci "$@" ;;
-  export) shift; export_server "$@" ;;
   show) shift; show "$@" ;;
   openbao) openbao ;;
   *) die "unknown command $1 (see the top of init/init.sh)" ;;

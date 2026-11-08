@@ -1,11 +1,11 @@
-# One MCP server on the platform's networks, as an example of what every server needs. Copy this file to servers.yaml,
-# change the names, and add it to .env:
+# One MCP server inside this Docker, as an example. Copy this file to servers.yaml, change the names, and add it to .env:
 #   COMPOSE_FILE=compose.yaml:servers.yaml
-# Before the server starts, issue its certificate, Redis account and secrets (README, Add an MCP server):
-#   docker compose run --rm init issue mcp-example
-# This file shows the server of the mcp-server-example image (serverId mcp-example, system example). A server from another
-# image has its own serverId and settings: the ones below that come from mcp-gateway, the Redis and the certificate stay the
-# same, the backend settings (MCP_EXAMPLE_*) are named after the system.
+# The server speaks plain http on the "servers" network (MCP_PLAIN_HTTP): that network is internal and holds only the gateway, nginx and
+# the servers. The administrator adds it in the portal as http://mcp-example:8443/mcp with "allow plain http" (README, Add an MCP server).
+# A server on another host is not part of this file: it runs from the deploy/ directory of its repository (README, MCP server on
+# another host).
+# This file shows the server of the mcp-server-example image (serverId mcp-example, system example). A server from another image
+# has its own serverId and settings; the backend settings (MCP_EXAMPLE_*) are named after the system.
 
 services:
   mcp-example:
@@ -19,50 +19,36 @@ services:
     tmpfs: ["/tmp:exec"]
     mem_limit: ${MCP_EXAMPLE_MEM_LIMIT:-1g}
     environment:
+      # The JVM trust store of the platform (public CAs, the internal CA, certs/company-ca.crt): the public keys of the gateway are
+      # fetched from https://<domain>, which reaches nginx under its network alias and presents the certificate of certs/tls.crt.
       JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
-      # The store password, the Redis password and the paging cursor key are files written by `init issue`.
-      SPRING_CONFIG_IMPORT: optional:configtree:/secrets/env/
-      MCP_TLS_KEYSTORE: /certs/own/keystore.p12
-      MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
-      MCP_GATEWAY_JWKS_URI: https://mcp-gateway.internal:8443/.well-known/jwks.json
-      MCP_GATEWAY_POLICY_DATA_URL: https://mcp-gateway.internal:8443/internal/v1/policy-data
+      MCP_PLAIN_HTTP: "true"
+      MCP_GATEWAY_JWKS_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/.well-known/mcp-jwks.json
       MCP_CONNECT_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/connections?system={system}
-      MCP_INTERNAL_URL: https://mcp-example.internal:8443/mcp
       MCP_ACCEPTED_CREDENTIAL_TYPES: user-secret
-      MCP_REDIS_HOST: servers-redis
       # API of the backend system, https. Set both in .env for the stub backend below: plain http is for tests only.
       MCP_EXAMPLE_URL: ${MCP_EXAMPLE_URL:?set MCP_EXAMPLE_URL in .env}
       MCP_EXAMPLE_ALLOW_PLAIN_HTTP: ${MCP_EXAMPLE_ALLOW_PLAIN_HTTP:-false}
     volumes:
-      - type: volume
-        source: secrets
-        target: /certs/own
-        read_only: true
-        volume: {subpath: pki/certs/mcp-example}
+      # Paging cursor key and the generated certificate (unused with plain http) stay between starts.
+      - mcp-example-state:/var/lib/mcp/state
       - type: volume
         source: secrets
         target: /certs/trust
         read_only: true
         volume: {subpath: pki/trust}
-      - type: volume
-        source: secrets
-        target: /secrets/env
-        read_only: true
-        volume: {subpath: servers/mcp-example/env}
     networks:
-      # The gateway reaches the server by this name, which is the SAN of the certificate; egress is the way to the backend.
+      # The gateway calls the server by this name; egress is the way to the backend.
       servers:
-        aliases: [mcp-example.internal]
+        aliases: [mcp-example]
       egress: {}
     healthcheck:
-      # An open port is the signal: /actuator/health asks for a client certificate like every other path.
+      # An open port is the signal: every path except /actuator/health needs a token, and the image has no HTTP client.
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8443"]
       interval: 5s
       timeout: 3s
       retries: 40
       start_period: 30s
-    depends_on:
-      servers-redis: {condition: service_healthy}
 
   # Test stack only (profile "stub"): the stub backend of mcp-e2e, built there as stub-backend/target/mcp-stub-backend.jar (make stub-test).
   # It accepts any credential and speaks plain http. Never on a production host.
@@ -78,3 +64,6 @@ services:
     volumes:
       - ${MCP_STUB_BACKEND_JAR:-./mcp-stub-backend.jar}:/app/stub-backend.jar:ro
     networks: [servers]
+
+volumes:
+  mcp-example-state:
