@@ -63,8 +63,11 @@ Both consoles are open to every network, because every administrator there needs
 also covers matrix-parameter variants such as `/auth/admin;x/`.
 
 `keycloak-config` runs once and keeps a marker in the volume. If the bootstrap account already had an OTP before it ran, it cannot sign
-in and says so: give the group `mcp-platform-admin` the client roles `query-groups`, `query-users`, `view-users` and `manage-users` of
-`realm-management` in the console, then `docker compose run --rm keycloak-config mark-done`.
+in and says so. Then do its steps by hand in the consoles: in the realm `mcp`, the client roles `query-groups`, `query-users`, `view-users`
+and `manage-users` of `realm-management` for the group `mcp-platform-admin`; in the realm `master`, brute force detection with 10
+failures, the password policy `length(12)`, `notUsername`, `passwordHistory(5)`, the required action Configure OTP enabled and set as
+default action, and an OTP on every administrator. Only then `docker compose run --rm keycloak-config mark-done`, which records that
+the run is no longer needed and checks nothing.
 
 ### Users and the two authenticators
 
