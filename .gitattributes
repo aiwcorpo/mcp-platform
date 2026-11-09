@@ -1,0 +1,3 @@
+# Scripts and configuration are mounted into Linux containers: a Windows checkout must keep LF endings.
+* text=auto eol=lf
+*.png binary
