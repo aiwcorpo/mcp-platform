@@ -200,6 +200,23 @@ The author starts the server from the `deploy/` directory of the server's reposi
       becomes unreachable (`certificate_changed`) and the portal shows the new fingerprint for approval.
 4. System in the broker, policies, tools, groups and scope mapping as for a server on the platform host (Add an MCP server, step 2).
 
+### Platform and server on one computer, without a domain
+
+For a test on one machine with Docker Desktop (macOS, Windows). Checked on macOS with a server as a second Compose project.
+
+- `MCP_DOMAIN` cannot be `localhost`: the server container would fetch the keys from itself, and nginx refuses a TLS name other
+  than `MCP_DOMAIN`. Use `mcp.localhost`; browsers and Node resolve `*.localhost` to the loopback address. A certificate with
+  `subjectAltName=DNS:mcp.localhost` from a CA of your own, the CA in `certs/company-ca.crt`.
+- `.env`: `MCP_DOMAIN=mcp.localhost`, `MCP_BIND=127.0.0.1`, and on other ports also `MCP_HTTPS_PORT`, `MCP_HTTP_PORT` and
+  `MCP_PUBLIC_ORIGIN=https://mcp.localhost:<port>`.
+- The server: the CA in its trust store (step 1 above), `MCP_GATEWAY_JWKS_URI=https://mcp.localhost:<port>/.well-known/mcp-jwks.json`,
+  and in a `compose.override.yaml` of its `deploy/` directory `extra_hosts: ["mcp.localhost:host-gateway"]` on the server service,
+  so that the name leads to the host from inside its container.
+- In the portal the address of the server is `https://host.docker.internal:<published port>/mcp`.
+- Claude Code: `NODE_EXTRA_CA_CERTS=<the CA file>` and the address `https://mcp.localhost:<port>/mcp`.
+
+On Linux `host.docker.internal` is not defined: the gateway would need `extra_hosts: ["host.docker.internal:host-gateway"]` too.
+
 For `ca` mode with a CA that is neither public nor `certs/company-ca.crt`, set `MCP_SERVER_TRUSTED_CAS_FILE` in `.env` to a PEM file with that
 CA and run `docker compose up -d`; the gateway then also trusts it for servers. It is optional: without it, servers with a certificate of a
 public CA or the company CA are `ca`, the others pinned. A server keeps working only while the gateway can reach its address: the
