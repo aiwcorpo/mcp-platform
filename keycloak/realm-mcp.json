@@ -793,60 +793,8 @@
   ],
   "groups": [
     {
-      "name": "mcp-jira-read",
-      "path": "/mcp-jira-read"
-    },
-    {
-      "name": "mcp-jira-write",
-      "path": "/mcp-jira-write"
-    },
-    {
-      "name": "mcp-jira-destructive",
-      "path": "/mcp-jira-destructive"
-    },
-    {
-      "name": "mcp-confluence-read",
-      "path": "/mcp-confluence-read"
-    },
-    {
-      "name": "mcp-confluence-write",
-      "path": "/mcp-confluence-write"
-    },
-    {
-      "name": "mcp-gitlab-read",
-      "path": "/mcp-gitlab-read"
-    },
-    {
-      "name": "mcp-gitlab-write",
-      "path": "/mcp-gitlab-write"
-    },
-    {
-      "name": "mcp-servicedesk-read",
-      "path": "/mcp-servicedesk-read"
-    },
-    {
-      "name": "mcp-servicedesk-write",
-      "path": "/mcp-servicedesk-write"
-    },
-    {
-      "name": "mcp-opensearch-read",
-      "path": "/mcp-opensearch-read"
-    },
-    {
-      "name": "mcp-opensearch-ops",
-      "path": "/mcp-opensearch-ops"
-    },
-    {
-      "name": "mcp-client-claude-code",
-      "path": "/mcp-client-claude-code"
-    },
-    {
       "name": "mcp-platform-admin",
       "path": "/mcp-platform-admin"
-    },
-    {
-      "name": "mcp-atlassian-read",
-      "path": "/mcp-atlassian-read"
     }
   ],
   "users": [

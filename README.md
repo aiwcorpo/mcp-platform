@@ -85,8 +85,8 @@ after 10 failed attempts (`passwordPolicy` and `failureFactor` of the realm).
 
 Residual risk: until the first login, whoever knows a user's initial password enrolls the OTP. Give initial passwords out of band, or
 federate the users from your company directory (Keycloak, User federation) so that no initial password exists. Users get access to
-a system through groups (`mcp-<system>-read` and so on); the realm in `keycloak/realm-mcp.json` defines the ones of the standard
-servers, add your own in the console.
+a system through groups (`mcp-<system>-read` and so on, the names the policies of the server use). The realm in
+`keycloak/realm-mcp.json` defines only `mcp-platform-admin`: create the groups of a server in the console when you add it.
 
 ## What runs
 

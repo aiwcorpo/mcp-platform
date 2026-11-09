@@ -1,6 +1,6 @@
 # Entitlements that the portal lists under access requests (adapter keycloak-groups: a catalog from a file, no request flow).
-# The names are Keycloak groups of the realm in keycloak/realm-mcp.json. Keep the systems your installation has and add a
-# line per system when you add one. The adapter refuses to start with an empty catalog. Restart the portal after a change.
+# The names are the Keycloak groups the policies of each server use; the realm import creates none of them, so they exist once
+# you create them in the console. Keep the systems your installation has and add a line per system when you add one. The adapter refuses to start with an empty catalog. Restart the portal after a change.
 entitlements:
   jira: [mcp-jira-read, mcp-jira-write, mcp-jira-destructive]
   confluence: [mcp-confluence-read, mcp-confluence-write]
