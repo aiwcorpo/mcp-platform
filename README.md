@@ -23,6 +23,9 @@ and key is generated on the first start and kept in Docker volumes. MCP servers 
     # edit .env: MCP_DOMAIN=mcp.corp.test
     ```
 
+    On an https port other than 443 also set `MCP_PUBLIC_ORIGIN=https://<domain>:<port>`; without it the addresses the platform hands
+    out (and the redirect from port 80) drop the port.
+
 3. Start:
 
     ```bash
@@ -40,7 +43,9 @@ new   internal CA /secrets/pki/ca/ca.crt (valid 10 years)
 ok    configuration, certificates and secrets are in place
 ```
 
-A second `docker compose up -d` changes nothing: `init` keeps every generated value.
+A second `docker compose up -d` changes nothing: `init` keeps every generated value. The first start takes a few minutes (the gateway
+and the broker wait for Keycloak and OpenBao); on it `gateway-init` may print `warn  broker ...: connection refused`, because the
+broker is still starting.
 
 4. The first platform administrator is `mcp-admin` (`MCP_ADMIN_USERNAME`). Its initial password is in the `secrets` volume, never in a log:
 
