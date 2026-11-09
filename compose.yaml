@@ -73,7 +73,6 @@ services:
       MCP_DOMAIN: ${MCP_DOMAIN:?set MCP_DOMAIN in .env (copy platform.env to .env)}
       MCP_PUBLIC_ORIGIN: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}
       MCP_ADMIN_USERNAME: ${MCP_ADMIN_USERNAME:-mcp-admin}
-      MCP_BROKER_TRUST_COMPANY_CA: ${MCP_BROKER_TRUST_COMPANY_CA:-false}
     volumes:
       - secrets:/secrets
       - ${MCP_CERTS_DIR:-./certs}:/operator-certs:ro
@@ -528,7 +527,9 @@ services:
       MCP_DB_URL: jdbc:postgresql://broker-postgres:5432/broker
       MCP_DB_USER: broker
       MCP_TLS_KEYSTORE: /certs/own/keystore.p12
-      MCP_TLS_TRUSTSTORE: /certs/trust/broker-truststore.p12
+      # Callers: the internal CA only. Connections out: also the company CA of certs/company-ca.crt (init/init.sh).
+      MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+      MCP_TLS_OUTBOUND_TRUSTSTORE: /certs/trust/broker-outbound-truststore.p12
     volumes:
       - type: volume
         source: secrets

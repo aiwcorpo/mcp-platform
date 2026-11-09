@@ -16,6 +16,9 @@ PKI="$S/pki"
 STATE="$S/state"
 OPERATOR=/operator-certs
 failures=0
+# Services whose certificate or trust store this run replaced on an existing installation: Java and the TLS servers read them only
+# at start, so they keep the old ones until restarted.
+restart=""
 
 say()  { printf '%s\n' "$*"; }
 ok()   { printf 'ok    %s\n' "$*"; }
@@ -23,6 +26,7 @@ new()  { printf 'new   %s\n' "$*" >&2; }
 warn() { printf 'warn  %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; failures=$((failures + 1)); }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+needs_restart() { for s in "$@"; do case " $restart " in *" $s "*) ;; *) restart="${restart:+$restart }$s" ;; esac; done; }
 
 # ---- files
 
@@ -64,11 +68,11 @@ value() {
 
 # ---- certificates
 
-# issue_cert <name> <serverAuth|clientAuth|both> <subjectAltName list> <owner> <dir> [days]
+# issue_cert <name> <serverAuth|clientAuth|both> <subjectAltName list> <owner> <dir> <service> [days]
 # The certificate is made again when it is missing, expires within 30 days, or the names or the CA changed. A directory that
 # holds the certificate of another name is never overwritten.
 issue_cert() {
-  name="$1"; role="$2"; sans="$3"; owner="$4"; d="$5"; days="${6:-730}"
+  name="$1"; role="$2"; sans="$3"; owner="$4"; d="$5"; service="$6"; days="${7:-730}"
   if [ -f "$d/tls.crt" ]; then
     cn="$(openssl x509 -in "$d/tls.crt" -noout -subject -nameopt multiline | sed -n 's/^ *commonName *= *//p')"
     [ "$cn" = "$name" ] || die "$d holds the certificate of $cn, not of $name"
@@ -85,6 +89,7 @@ issue_cert() {
     chown -R "$owner" "$d"
     return 0
   fi
+  [ -f "$d/tls.crt" ] && needs_restart "$service"
   mk "$d"
   printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature" "extendedKeyUsage=$eku" \
     ${sans:+"subjectAltName=$sans"} > "$d/ext.cnf"
@@ -130,14 +135,17 @@ trust_stores() {
 
   company=0
   [ -s "$OPERATOR/company-ca.crt" ] && company=1
-  sig="$(cat "$PKI/ca/ca.crt" "$JAVA_HOME/lib/security/cacerts" 2>/dev/null | sha256sum | cut -d' ' -f1)-$company-${MCP_BROKER_TRUST_COMPANY_CA:-false}"
+  sig="$(cat "$PKI/ca/ca.crt" "$JAVA_HOME/lib/security/cacerts" 2>/dev/null | sha256sum | cut -d' ' -f1)-$company-outbound"
   [ "$company" = 1 ] && sig="$sig-$(sha256sum < "$OPERATOR/company-ca.crt" | cut -d' ' -f1)"
   [ -f "$t/truststore.p12" ] && [ "$(cat "$t/signature" 2>/dev/null)" = "$sig" ] && return 0
+  [ -f "$t/truststore.p12" ] && needs_restart gateway mcp-credential-broker portal
 
   work="$(mktemp -d)"
   keytool -importcert -noprompt -alias mcp-internal-ca -file "$PKI/ca/ca.crt" -keystore "$work/truststore.p12" \
     -storetype PKCS12 -storepass "$pw" >/dev/null 2>&1
-  cp "$work/truststore.p12" "$work/broker-truststore.p12"
+  # The broker's connections out (identity provider, OpenBao, gateway, the systems behind it) trust this one; truststore.p12
+  # decides the client certificates the gateway and the broker accept and keeps the internal CA alone.
+  cp "$work/truststore.p12" "$work/broker-outbound-truststore.p12"
   # The JVM default store: the public CAs of this JDK, the internal CA (the identity provider answers there with an internal
   # certificate) and the company CA, so that a name that goes through nginx can be verified too.
   cp "$JAVA_HOME/lib/security/cacerts" "$work/jvm-truststore.p12"
@@ -149,17 +157,15 @@ trust_stores() {
     for c in "$work"/company-*.crt; do
       n="$(basename "$c" .crt)"
       keytool -importcert -noprompt -alias "$n" -file "$c" -keystore "$work/jvm-truststore.p12" -storetype PKCS12 -storepass changeit >/dev/null 2>&1
-      # The broker's HTTP client trusts only its truststore, so systems behind the company CA need it there. The same store
-      # also decides which client certificates the broker accepts: off unless the operator asks for it.
-      if [ "${MCP_BROKER_TRUST_COMPANY_CA:-false}" = true ]; then
-        keytool -importcert -noprompt -alias "$n" -file "$c" -keystore "$work/broker-truststore.p12" -storetype PKCS12 -storepass "$pw" >/dev/null 2>&1
-      fi
+      keytool -importcert -noprompt -alias "$n" -file "$c" -keystore "$work/broker-outbound-truststore.p12" -storetype PKCS12 -storepass "$pw" >/dev/null 2>&1
     done
   fi
-  for f in truststore.p12 broker-truststore.p12 jvm-truststore.p12; do
+  for f in truststore.p12 broker-outbound-truststore.p12 jvm-truststore.p12; do
     mv "$work/$f" "$t/$f"
     chmod 444 "$t/$f"
   done
+  # Before 2.0 the broker had one store for both directions, with the company CA in it on request.
+  rm -f "$t/broker-truststore.p12"
   printf '%s' "$sig" > "$t/signature"
   rm -rf "$work"
   new "truststores in $t (internal CA$([ "$company" = 1 ] && echo ', company CA'))"
@@ -229,11 +235,11 @@ bootstrap() {
   mk "$gw"
 
   # Names are the contract between the components: every client verifies the broker and the gateway by these names (compose.yaml sets the matching network aliases).
-  issue_cert mcp-gateway both "DNS:mcp-gateway.internal,DNS:mcp-gateway" 999:999 "$gw/mcp-gateway"
-  issue_cert mcp-credential-broker serverAuth "DNS:mcp-credential-broker.internal,DNS:mcp-credential-broker" 100:101 "$gw/mcp-credential-broker"
-  issue_cert mcp-portal-bff clientAuth "" 100:101 "$gw/mcp-portal-bff"
-  issue_cert keycloak serverAuth "DNS:keycloak.internal,DNS:keycloak,DNS:localhost,IP:127.0.0.1" 1000:0 "$gw/keycloak"
-  issue_cert openbao serverAuth "DNS:openbao.internal,DNS:openbao,DNS:localhost,IP:127.0.0.1" 100:1000 "$gw/openbao"
+  issue_cert mcp-gateway both "DNS:mcp-gateway.internal,DNS:mcp-gateway" 999:999 "$gw/mcp-gateway" gateway
+  issue_cert mcp-credential-broker serverAuth "DNS:mcp-credential-broker.internal,DNS:mcp-credential-broker" 100:101 "$gw/mcp-credential-broker" mcp-credential-broker
+  issue_cert mcp-portal-bff clientAuth "" 100:101 "$gw/mcp-portal-bff" portal
+  issue_cert keycloak serverAuth "DNS:keycloak.internal,DNS:keycloak,DNS:localhost,IP:127.0.0.1" 1000:0 "$gw/keycloak" keycloak
+  issue_cert openbao serverAuth "DNS:openbao.internal,DNS:openbao,DNS:localhost,IP:127.0.0.1" 100:1000 "$gw/openbao" openbao
 
   # Per consumer, mounted read-only by that service only.
   dir "$S/gw" 0:0
@@ -301,6 +307,9 @@ E
 
   say
   ok "configuration, certificates and secrets are in place"
+  if [ -n "$restart" ]; then
+    warn "certificates or trust stores changed; these services still use the old ones until: docker compose restart $restart"
+  fi
   say "      first platform administrator: $MCP_ADMIN_USERNAME"
   say "      initial password: docker compose run --rm init show admin-password (valid until the first login)"
 }

@@ -203,11 +203,14 @@ gateway has its route out through the `egress` network.
 
 - nginx: yours (`certs/`). After renewing it run `docker compose up -d` (init copies it) and `docker compose restart nginx`.
 - Internal: one CA (10 years) and certificates of 2 years for the gateway, broker, portal, Keycloak and OpenBao. `init`
-  makes a certificate again when it expires within 30 days; restart the stack afterwards. Replacing the CA itself means deleting
+  makes a certificate again when it expires within 30 days (see the next point on restarting). Replacing the CA itself means deleting
   `pki/` in the `secrets` volume. MCP servers have no certificate from this CA.
-- `company-ca.crt` also goes into the JVM trust store of the gateway, broker and portal. Systems behind the broker that use the company
-  CA need it in the broker's own trust store, which also decides which client certificates the broker accepts; set
-  `MCP_BROKER_TRUST_COMPANY_CA=true` for that, and read the consequence under Known limits first.
+- `company-ca.crt` also goes into the JVM trust store of the gateway, broker and portal, and into the broker's outbound trust store,
+  so that systems behind the broker with a company certificate (GitLab, Jira...) work. The broker accepts client certificates only
+  from the internal CA: that store is a separate one.
+- `init` replaces certificates and trust stores on a running installation without restarting anything. When it does, it ends with
+  `warn  certificates or trust stores changed` and the `docker compose restart` command for the services that still use the old
+  ones.
 
 ## OpenBao after a restart
 
@@ -262,10 +265,6 @@ can report a failure although the platform is fine, and `up -d` runs it again in
 - The gateway and the broker each have their own Redis, as asked. The broker publishes `credential.invalidated` on its Redis and the
   gateway subscribes on its own, so the gateway does not learn of a revoked credential at once; its cache keeps one for at most 60 s.
   Pointing both at one Redis closes the gap.
-- Any certificate of the company CA with CN `mcp-offboarding` can purge users and reset authenticators at the broker without a token,
-  if you set `MCP_BROKER_TRUST_COMPANY_CA=true`: the broker has one trust store for the certificates it accepts from clients and for the
-  systems it calls. Enable the flag only if your company CA does not let requesters choose the subject of a certificate. The broker needs a
-  separate outbound trust store; that is a limitation of the component, not of this bundle.
 - The broker, the gateway and the MCP servers of `servers.example.yaml` share the network `egress` (the Docker address pool of a host with many
   networks may not have room for a second one).
 - The gateway's plain-http port 8080 and Keycloak's and the portal's are reachable on the networks they share with the services that do not
