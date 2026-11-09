@@ -62,12 +62,13 @@ Both consoles are open to every network, because every administrator there needs
 `nginx/keycloak-admin-allow.conf` (`allow <network>;` lines, then `deny all;`) and run `docker compose restart nginx`. The rule
 also covers matrix-parameter variants such as `/auth/admin;x/`.
 
-`keycloak-config` runs once and keeps a marker in the volume. If the bootstrap account already had an OTP before it ran, it cannot sign
-in and says so. Then do its steps by hand in the consoles: in the realm `mcp`, the client roles `query-groups`, `query-users`, `view-users`
+`keycloak-config` runs once and keeps a marker in the volume. nginx starts only after it succeeded, because the open consoles rely on
+the OTP it requires. If the bootstrap account already had an OTP before it ran, it cannot sign in and says so, and nginx stays down.
+Then start nginx alone (`docker compose up -d --no-deps nginx`) and do its steps by hand in the consoles: in the realm `mcp`, the client roles `query-groups`, `query-users`, `view-users`
 and `manage-users` of `realm-management` for the group `mcp-platform-admin`; in the realm `master`, brute force detection with 10
 failures, the password policy `length(12)`, `notUsername`, `passwordHistory(5)`, the required action Configure OTP enabled and set as
 default action, and an OTP on every administrator. Only then `docker compose run --rm keycloak-config mark-done`, which records that
-the run is no longer needed and checks nothing.
+the run is no longer needed and checks nothing; from then on `docker compose up -d` starts nginx as usual.
 
 ### Users and the two authenticators
 
@@ -265,6 +266,9 @@ can report a failure although the platform is fine, and `up -d` runs it again in
 - The gateway and the broker each have their own Redis, as asked. The broker publishes `credential.invalidated` on its Redis and the
   gateway subscribes on its own, so the gateway does not learn of a revoked credential at once; its cache keeps one for at most 60 s.
   Pointing both at one Redis closes the gap.
+- The broker's outbound trust store holds the company CA for all of its connections, including Keycloak, OpenBao and the gateway on
+  the internal network, not only for the systems behind it. A company certificate for one of those internal names would let whoever
+  can also redirect that name inside Docker impersonate it to the broker.
 - The broker, the gateway and the MCP servers of `servers.example.yaml` share the network `egress` (the Docker address pool of a host with many
   networks may not have room for a second one).
 - The gateway's plain-http port 8080 and Keycloak's and the portal's are reachable on the networks they share with the services that do not

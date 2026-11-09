@@ -132,7 +132,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    depends_on: *depends-init
+    # The Keycloak consoles are open to every network (nginx/keycloak-admin-allow.conf) only because keycloak-config makes OTP
+    # mandatory for the master realm's administrators; when it fails, nginx does not start, so the failure cannot go unnoticed.
+    depends_on:
+      <<: *depends-init
+      keycloak-config: {condition: service_completed_successfully}
 
   keycloak-postgres:
     <<: *postgres

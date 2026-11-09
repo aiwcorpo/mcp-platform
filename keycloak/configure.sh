@@ -18,10 +18,12 @@ fi
 set -a; . /secrets/env; set +a
 kc() { /opt/keycloak/bin/kcadm.sh "$@" --config /tmp/kcadm.config; }
 
-if ! kc config credentials --server http://keycloak.internal:8080/auth --realm master \
-    --user "$KC_BOOTSTRAP_ADMIN_USERNAME" --password "$KC_BOOTSTRAP_ADMIN_PASSWORD" >/tmp/login.log 2>&1; then
+# From the environment, not --password: arguments are visible to every process on the host.
+if ! KC_CLI_PASSWORD="$KC_BOOTSTRAP_ADMIN_PASSWORD" kc config credentials --server http://keycloak.internal:8080/auth --realm master \
+    --user "$KC_BOOTSTRAP_ADMIN_USERNAME" >/tmp/login.log 2>&1 </dev/null; then
   echo "FAIL  keycloak: $KC_BOOTSTRAP_ADMIN_USERNAME cannot sign in with its password ($(tail -1 /tmp/login.log))."
-  echo "      If it already has an OTP, do by hand in the console what this script does (README, the administration consoles):"
+  echo "      nginx waits for this service. If the account already has an OTP, start nginx alone (docker compose up -d --no-deps nginx)"
+  echo "      and do by hand in the console what this script does (README, the administration consoles):"
   echo "      realm mcp, group mcp-platform-admin: client roles query-groups, query-users, view-users, manage-users of realm-management;"
   echo "      realm master: brute force detection with 10 failures, password policy length(12), notUsername, passwordHistory(5),"
   echo "      required action Configure OTP enabled and set as default action, an OTP on every administrator. Then run"
