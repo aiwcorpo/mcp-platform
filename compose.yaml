@@ -310,7 +310,7 @@ services:
   # keys) and the checks of its configuration, including a request for the keys of the identity provider.
   gateway-init:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.0}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1}
     command: ["init", "/secrets"]
     restart: "no"
     tmpfs: ["/tmp"]
@@ -429,7 +429,7 @@ services:
 
   gateway:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.0}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1}
     mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
     environment: *gateway-env
     volumes:
@@ -572,7 +572,7 @@ services:
   # The single-container "portal" image: the BFF with the single-page application inside.
   portal:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.0.0}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.0.1}
     mem_limit: ${PORTAL_MEM_LIMIT:-1g}
     environment:
       <<: *java-env
