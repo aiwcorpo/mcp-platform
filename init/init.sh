@@ -5,6 +5,7 @@
 #   init.sh                  every start: check the configuration, generate what is missing, keep what exists
 #   init.sh show <what>      print one generated value: admin-password, keycloak-admin, client-secret <client>, ca
 #   init.sh openbao          initialise, unseal and provision OpenBao, then keep it unsealed (never returns)
+#   init.sh recover          new provisioner token after it expired or was lost; runs in the "openbao-recover" service
 #
 # Everything generated lives in the volume "secrets" (/secrets), laid out per consumer so that a service mounts only its own
 # directory (compose.yaml, volume subpath). state/ holds the single copy of every generated value and is mounted nowhere else.
@@ -337,70 +338,93 @@ show() {
 
 # ---- OpenBao (runs in the OpenBao image, which is Alpine: POSIX sh only)
 
-openbao() {
-  set +e
-  export BAO_ADDR="${BAO_ADDR:-https://openbao.internal:8200}"
-  export BAO_CACERT=/trust/ca.crt
-  keys=/keys
-  ready=/tmp/ready
-  last=""
-  note() { [ "$last" = "$1" ] || { say "openbao-unseal: $1"; last="$1"; }; }
+keys=/keys
 
-  # The init output (unseal key, root token) is parsed from a variable and written with umask 077; neither is ever printed.
-  store_init_output() {
-    key="$(printf '%s' "$1" | sed -n '/unseal_keys_b64/,/\]/{/unseal_keys_b64/d;/\]/d;s/^ *"\([^"]*\)".*/\1/p;}' | head -1)"
-    root="$(printf '%s' "$1" | sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' | head -1)"
-    [ -n "$key" ] && [ -n "$root" ] || return 1
-    printf '%s\n' "$key" > "$keys/unseal-key.tmp" && printf '%s\n' "$root" > "$keys/root-token.tmp" || return 1
-    mv "$keys/unseal-key.tmp" "$keys/unseal-key" && mv "$keys/root-token.tmp" "$keys/root-token"
-  }
+# The init output (unseal key, root token) is parsed from a variable and written with umask 077; neither is ever printed.
+store_init_output() {
+  key="$(printf '%s' "$1" | sed -n '/unseal_keys_b64/,/\]/{/unseal_keys_b64/d;/\]/d;s/^ *"\([^"]*\)".*/\1/p;}' | head -1)"
+  root="$(printf '%s' "$1" | sed -n 's/.*"root_token": *"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$key" ] && [ -n "$root" ] || return 1
+  printf '%s\n' "$key" > "$keys/unseal-key.tmp" && printf '%s\n' "$root" > "$keys/root-token.tmp" || return 1
+  mv "$keys/unseal-key.tmp" "$keys/unseal-key" && mv "$keys/root-token.tmp" "$keys/root-token"
+}
 
-  # What provisioning needs and nothing else: no read or write of any secret, no Transit use.
-  bootstrap_provisioner() {
-    [ -s "$keys/root-token" ] || return 1
-    root="$(cat "$keys/root-token")"
-    BAO_TOKEN="$root" bao policy write mcp-provisioner - >/dev/null <<'HCL' || return 1
+# What provisioning needs and nothing else: no read or write of any secret, no Transit use. Policies: it writes mcp-credential-broker
+# and nothing else, and it cannot rewrite its own (the deny), so a stolen token cannot grant itself more. It still sets the broker
+# AppRole and creates secret_ids for it, so the token can act as the broker. sys/auth is read-only here: enabling a method needs
+# sudo, and the AppRole method is enabled by bootstrap_provisioner with the root token.
+provisioner_policy() {
+  cat <<'HCL'
 path "sys/mounts"   { capabilities = ["read"] }
 path "sys/mounts/*" { capabilities = ["create", "read", "update"] }
 path "sys/auth"     { capabilities = ["read"] }
-path "sys/auth/*"   { capabilities = ["create", "read", "update", "sudo"] }
-path "sys/policies/acl/*" { capabilities = ["create", "read", "update"] }
+path "sys/policies/acl/mcp-credential-broker" { capabilities = ["create", "read", "update"] }
+path "sys/policies/acl/mcp-provisioner"       { capabilities = ["deny"] }
 path "auth/approle/role/mcp-credential-broker"   { capabilities = ["create", "read", "update"] }
 path "auth/approle/role/mcp-credential-broker/*" { capabilities = ["create", "read", "update", "delete"] }
 path "transit/keys/mcp-credential-broker" { capabilities = ["create", "read", "update"] }
 path "transit/keys/mcp-authenticators"    { capabilities = ["create", "read", "update"] }
 path "sys/storage/raft/snapshot" { capabilities = ["read"] }
 HCL
-    out="$(BAO_TOKEN="$root" bao token create -orphan -policy=mcp-provisioner -period=768h -display-name=provisioner -format=json 2>/dev/null)" || return 1
-    tok="$(printf '%s' "$out" | sed -n 's/.*"client_token": *"\([^"]*\)".*/\1/p' | head -1)"
-    [ -n "$tok" ] || return 1
-    printf '%s\n' "$tok" > "$keys/provisioner-token.tmp" && mv "$keys/provisioner-token.tmp" "$keys/provisioner-token"
-  }
+}
 
-  # Idempotent: creates what is missing, rewrites the policy, never touches Transit keys or stored secrets. Runs with the
-  # token of the provisioner policy; the root token only creates that token and is revoked once provisioning has worked with it.
-  provision() {
-    export BAO_TOKEN
-    if ! [ -s "$keys/provisioner-token" ] || ! BAO_TOKEN="$(cat "$keys/provisioner-token")" bao token lookup >/dev/null 2>&1; then
-      bootstrap_provisioner || return 1
-    fi
-    BAO_TOKEN="$(cat "$keys/provisioner-token")"
-    bao token renew >/dev/null 2>&1 || return 1
-    role_id="$(cat /approle/role-id)"
-    secret_id="$(cat /approle/secret-id)"
-    bao secrets list -format=json | grep -q '"secret/"' || bao secrets enable -path=secret -version=2 kv >/dev/null || return 1
-    bao secrets list -format=json | grep -q '"transit/"' || bao secrets enable transit >/dev/null || return 1
-    bao read transit/keys/mcp-credential-broker >/dev/null 2>&1 || bao write -f transit/keys/mcp-credential-broker type=aes256-gcm96 >/dev/null || return 1
-    # A separate key: seeds of the Authenticator can be rotated or revoked without touching stored credentials.
-    bao read transit/keys/mcp-authenticators >/dev/null 2>&1 || bao write -f transit/keys/mcp-authenticators type=aes256-gcm96 >/dev/null || return 1
-    bao policy write mcp-credential-broker - >/dev/null <<'HCL' || return 1
+provisioner_valid() {
+  [ -s "$keys/provisioner-token" ] && BAO_TOKEN="$(cat "$keys/provisioner-token")" bao token lookup >/dev/null 2>&1
+}
+
+# True only when OpenBao answered and refused the token (expired, revoked) or there is none: not while the server is restarting.
+provisioner_dead() {
+  [ -s "$keys/provisioner-token" ] || return 0
+  BAO_TOKEN="$(cat "$keys/provisioner-token")" bao token lookup 2>&1 | grep -q 'permission denied'
+}
+
+# mint_provisioner <root token>: the one step that needs root. Writes the policy, enables AppRole, creates the provisioner token.
+mint_provisioner() {
+  provisioner_policy | BAO_TOKEN="$1" bao policy write mcp-provisioner - >/dev/null || return 1
+  BAO_TOKEN="$1" bao auth list -format=json | grep -q '"approle/"' || BAO_TOKEN="$1" bao auth enable approle >/dev/null || return 1
+  out="$(BAO_TOKEN="$1" bao token create -orphan -policy=mcp-provisioner -period=768h -display-name=provisioner -format=json 2>/dev/null)" || return 1
+  tok="$(printf '%s' "$out" | sed -n 's/.*"client_token": *"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$tok" ] || return 1
+  printf '%s\n' "$tok" > "$keys/provisioner-token.tmp" && mv "$keys/provisioner-token.tmp" "$keys/provisioner-token"
+}
+
+bootstrap_provisioner() {
+  [ -s "$keys/root-token" ] || return 1
+  mint_provisioner "$(cat "$keys/root-token")"
+}
+
+# An installation made before the deny existed holds a token whose policy can still rewrite mcp-provisioner: do it once, with
+# that token, so that the narrowed policy applies from the next request on.
+narrow_provisioner_policy() {
+  bao token capabilities sys/policies/acl/mcp-provisioner 2>/dev/null | grep -Eq 'create|update' || return 0
+  provisioner_policy | bao policy write mcp-provisioner - >/dev/null || return 1
+  say "openbao-unseal: policy mcp-provisioner narrowed"
+}
+
+# Idempotent: creates what is missing, rewrites the policy, never touches Transit keys or stored secrets. Runs with the
+# token of the provisioner policy; the root token only creates that token and is revoked once provisioning has worked with it.
+provision() {
+  export BAO_TOKEN
+  provisioner_valid || bootstrap_provisioner || return 1
+  BAO_TOKEN="$(cat "$keys/provisioner-token")"
+  bao token renew >/dev/null 2>&1 || return 1
+  narrow_provisioner_policy || return 1
+  role_id="$(cat /approle/role-id)"
+  secret_id="$(cat /approle/secret-id)"
+  bao secrets list -format=json | grep -q '"secret/"' || bao secrets enable -path=secret -version=2 kv >/dev/null || return 1
+  bao secrets list -format=json | grep -q '"transit/"' || bao secrets enable transit >/dev/null || return 1
+  bao read transit/keys/mcp-credential-broker >/dev/null 2>&1 || bao write -f transit/keys/mcp-credential-broker type=aes256-gcm96 >/dev/null || return 1
+  # A separate key: seeds of the Authenticator can be rotated or revoked without touching stored credentials.
+  bao read transit/keys/mcp-authenticators >/dev/null 2>&1 || bao write -f transit/keys/mcp-authenticators type=aes256-gcm96 >/dev/null || return 1
+  bao policy write mcp-credential-broker - >/dev/null <<'HCL' || return 1
 path "secret/data/mcp/connections/*"     { capabilities = ["create", "read", "update", "delete"] }
 path "secret/metadata/mcp/connections/*" { capabilities = ["read", "list", "delete"] }
 path "secret/data/mcp/system-clients/*"     { capabilities = ["create", "read", "update"] }
 path "secret/metadata/mcp/system-clients/*" { capabilities = ["read"] }
 path "secret/destroy/mcp/system-clients/*"  { capabilities = ["update"] }
 path "secret/data/mcp/oauth-clients/*"      { capabilities = ["read"] }
-path "secret/data/mcp/service-accounts/*"   { capabilities = ["read"] }
+path "secret/data/mcp/service-accounts/*"     { capabilities = ["create", "read", "update"] }
+path "secret/metadata/mcp/service-accounts/*" { capabilities = ["read", "delete"] }
 path "transit/encrypt/mcp-credential-broker" { capabilities = ["update"] }
 path "transit/decrypt/mcp-credential-broker" { capabilities = ["update"] }
 path "secret/data/mcp/authenticators/*"     { capabilities = ["create", "read", "update", "delete"] }
@@ -408,21 +432,29 @@ path "secret/metadata/mcp/authenticators/*" { capabilities = ["read", "list", "d
 path "transit/encrypt/mcp-authenticators" { capabilities = ["update"] }
 path "transit/decrypt/mcp-authenticators" { capabilities = ["update"] }
 HCL
-    bao auth list -format=json | grep -q '"approle/"' || bao auth enable approle >/dev/null || return 1
-    # The broker keeps one secret_id and logs in with it whenever its token ends, so the secret_id does not expire. Replacing
-    # it is a decision of the operator (README, Rotate the broker's secret_id).
-    bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h >/dev/null || return 1
-    bao write auth/approle/role/mcp-credential-broker/role-id role_id="$role_id" >/dev/null || return 1
-    lookup="$(printf '%s' "$secret_id" | bao write -format=json auth/approle/role/mcp-credential-broker/secret-id/lookup secret_id=- 2>/dev/null || true)"
-    if ! printf '%s' "$lookup" | grep -q '"secret_id_accessor"'; then
-      printf '%s' "$secret_id" | bao write auth/approle/role/mcp-credential-broker/custom-secret-id secret_id=- >/dev/null || return 1
-    fi
-    if [ -s "$keys/root-token" ]; then
-      BAO_TOKEN="$(cat "$keys/root-token")" bao token revoke -self >/dev/null 2>&1 && rm -f "$keys/root-token" && say "openbao-unseal: root token revoked"
-    fi
-    unset BAO_TOKEN
-    return 0
-  }
+  bao auth list -format=json | grep -q '"approle/"' || bao auth enable approle >/dev/null || return 1
+  # The broker keeps one secret_id and logs in with it whenever its token ends, so the secret_id does not expire. Replacing
+  # it is a decision of the operator (README, Rotate the broker's secret_id).
+  bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h >/dev/null || return 1
+  bao write auth/approle/role/mcp-credential-broker/role-id role_id="$role_id" >/dev/null || return 1
+  lookup="$(printf '%s' "$secret_id" | bao write -format=json auth/approle/role/mcp-credential-broker/secret-id/lookup secret_id=- 2>/dev/null || true)"
+  if ! printf '%s' "$lookup" | grep -q '"secret_id_accessor"'; then
+    printf '%s' "$secret_id" | bao write auth/approle/role/mcp-credential-broker/custom-secret-id secret_id=- >/dev/null || return 1
+  fi
+  if [ -s "$keys/root-token" ]; then
+    BAO_TOKEN="$(cat "$keys/root-token")" bao token revoke -self >/dev/null 2>&1 && rm -f "$keys/root-token" && say "openbao-unseal: root token revoked"
+  fi
+  unset BAO_TOKEN
+  return 0
+}
+
+openbao() {
+  set +e
+  export BAO_ADDR="${BAO_ADDR:-https://openbao.internal:8200}"
+  export BAO_CACERT=/trust/ca.crt
+  ready=/tmp/ready
+  last=""
+  note() { [ "$last" = "$1" ] || { say "openbao-unseal: $1"; last="$1"; }; }
 
   provisioned_at=0
   while true; do
@@ -464,7 +496,11 @@ HCL
           note "unsealed and provisioned"
         else
           rm -f "$ready"
-          note "provisioning failed, retrying"
+          if provisioner_dead && [ ! -s "$keys/root-token" ]; then
+            note "FAIL the provisioner token has expired or is lost and there is no root token: docker compose run --rm openbao-recover"
+          else
+            note "provisioning failed, retrying"
+          fi
         fi
       fi
     fi
@@ -472,9 +508,152 @@ HCL
   done
 }
 
+# ---- recovery of the provisioner token
+
+# recover: for a provisioner token that expired (period 768h: OpenBao was down for more than 32 days) or was lost. Runs in
+# openbao-recover, which shares the network of the openbao container. OpenBao 2.6 and later generate a root token only through an
+# authenticated endpoint, unless a listener sets disable_unauthed_generate_root_endpoints = false. So: openbao/run.sh restarts the
+# server with a loopback listener while /recovery/listener.hcl exists, the unseal key makes a root token through it, the root
+# token mints a new provisioner token and is revoked, the file goes and the server restarts without the listener. Nothing of this
+# stays behind on failure: cleanup revokes the root token, cancels a generation in progress and removes the file, and run.sh
+# ignores a file older than 10 minutes even when this process is killed.
+recover() {
+  set +e
+  export BAO_CACERT=/trust/ca.crt
+  main_addr="${BAO_ADDR:-https://127.0.0.1:8200}"
+  export BAO_ADDR="$main_addr"
+  rec_addr=http://127.0.0.1:8300
+  marker=/recovery/listener.hcl
+  root_token=""
+  clean=0
+
+  [ -s "$keys/unseal-key" ] || die "$keys/unseal-key is missing: openbao-keys is not the volume of this installation"
+  status="$(bao status -format=json 2>/dev/null)"
+  [ -n "$status" ] || die "OpenBao does not answer on $main_addr"
+  printf '%s' "$status" | grep -q '"initialized": *true' || die "OpenBao is not initialised: start openbao-unseal first"
+
+  unseal_at() {
+    st="$(BAO_ADDR="$1" bao status -format=json 2>/dev/null)"
+    printf '%s' "$st" | grep -q '"sealed": *true' || return 0
+    BAO_ADDR="$1" bao write sys/unseal key=- < "$keys/unseal-key" >/dev/null 2>&1
+  }
+  # wait_state <addr> <up|down>: seconds, 90 at most.
+  wait_state() {
+    n=0
+    while [ "$n" -lt 90 ]; do
+      BAO_ADDR="$1" bao status -format=json >/dev/null 2>&1
+      rc=$?
+      if [ "$2" = up ] && [ "$rc" -ne 1 ]; then return 0; fi
+      if [ "$2" = down ] && [ "$rc" -eq 1 ]; then return 0; fi
+      n=$((n + 1)); sleep 1
+    done
+    return 1
+  }
+
+  cleanup() {
+    [ "$clean" -eq 0 ] || return 0
+    clean=1
+    trap - EXIT INT TERM HUP
+    revoked=1
+    if [ -n "$root_token" ]; then
+      revoked=0
+      n=0
+      while [ "$n" -lt 20 ] && [ "$revoked" -eq 0 ]; do
+        for a in "$main_addr" "$rec_addr"; do
+          unseal_at "$a"
+          BAO_ADDR="$a" BAO_TOKEN="$root_token" bao token revoke -self >/dev/null 2>&1 && revoked=1 && break
+        done
+        n=$((n + 1)); [ "$revoked" -eq 1 ] || sleep 2
+      done
+      root_token=""
+    fi
+    BAO_ADDR="$rec_addr" bao delete sys/generate-root/attempt >/dev/null 2>&1
+    rm -f "$marker" "$marker.tmp"
+    if wait_state "$rec_addr" down && wait_state "$main_addr" up; then unseal_at "$main_addr"; else
+      warn "the recovery listener may still be open: it closes by itself within 10 minutes (openbao/run.sh)"
+    fi
+    [ "$revoked" -eq 1 ] || printf 'FAIL  the generated root token could not be revoked: restart openbao and run: docker compose run --rm openbao-recover\n'
+  }
+  trap cleanup EXIT
+  trap 'cleanup; exit 1' INT TERM HUP
+
+  if provisioner_valid; then
+    warn "the provisioner token is still valid: replacing it anyway"
+  else
+    ok "provisioner token is expired or missing"
+  fi
+
+  mk /recovery
+  cat > "$marker.tmp" <<'HCL'
+listener "tcp" {
+  address                                  = "127.0.0.1:8300"
+  tls_disable                              = true
+  disable_unauthed_generate_root_endpoints = false
+}
+HCL
+  # umask 077 would hide it from the openbao user; it holds nothing secret.
+  chmod 644 "$marker.tmp"
+  mv "$marker.tmp" "$marker" || die "cannot write $marker"
+  wait_state "$rec_addr" up || die "the recovery listener did not come up"
+  unseal_at "$rec_addr" || die "unseal failed"
+  wait_state "$rec_addr" up
+  ok "recovery listener open on 127.0.0.1:8300 of the openbao container (closes at the end of this command)"
+
+  # A generation left behind by an earlier, killed run would make this one fail with "already in progress".
+  BAO_ADDR="$rec_addr" bao delete sys/generate-root/attempt >/dev/null 2>&1
+  att="$(BAO_ADDR="$rec_addr" bao write -f -format=json sys/generate-root/attempt 2>/dev/null)"
+  nonce="$(printf '%s' "$att" | sed -n 's/.*"nonce": *"\([^"]*\)".*/\1/p' | head -1)"
+  otp="$(printf '%s' "$att" | sed -n 's/.*"otp": *"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$nonce" ] && [ -n "$otp" ] || die "could not start the root token generation"
+  upd="$(BAO_ADDR="$rec_addr" bao write -format=json sys/generate-root/update key=- nonce="$nonce" < "$keys/unseal-key" 2>/dev/null)"
+  enc="$(printf '%s' "$upd" | sed -n 's/.*"encoded_token": *"\([^"]*\)".*/\1/p' | head -1)"
+  [ -n "$enc" ] || die "the unseal key was not accepted"
+  root_token="$(xor_decode "$enc" "$otp")"
+  [ -n "$root_token" ] || die "could not decode the root token"
+  BAO_TOKEN="$root_token" bao token lookup >/dev/null 2>&1 || die "the generated root token does not work"
+
+  old=""
+  provisioner_valid && old="$(cat "$keys/provisioner-token")"
+  mint_provisioner "$root_token" || die "could not create the provisioner token"
+  [ -z "$old" ] || BAO_TOKEN="$old" bao token revoke -self >/dev/null 2>&1
+  BAO_TOKEN="$root_token" bao token revoke -self >/dev/null 2>&1 || die "could not revoke the root token"
+  root_token=""
+  ok "new provisioner token in the volume openbao-keys, root token revoked"
+
+  cleanup
+  provisioner_valid || die "the new provisioner token does not work"
+  # openbao-unseal provisions too, as soon as it sees the new token; two runs at once can lose a storage transaction.
+  n=0
+  until provision; do
+    n=$((n + 1))
+    [ "$n" -lt 5 ] || die "provisioning failed with the new token (see the log of openbao-unseal)"
+    sleep 3
+  done
+  ok "provisioning ran with the new token"
+  ok "recovered: openbao-unseal renews the provisioner token from now on"
+}
+
+# xor_decode <base64 without padding> <otp>: the encoded root token is the token XOR the one-time password, byte by byte.
+xor_decode() {
+  case $(( ${#1} % 4 )) in 2) pad="==" ;; 3) pad="=" ;; *) pad="" ;; esac
+  set -- "$(printf '%s%s' "$1" "$pad" | base64 -d | od -An -v -tu1 | tr -s ' \n' ' ')" "$(printf '%s' "$2" | od -An -v -tu1 | tr -s ' \n' ' ')"
+  out=""
+  i=1
+  for b in $1; do
+    o="$(printf '%s' "$2" | cut -d' ' -f$((i + 1)))"
+    out="$out$(printf "\\$(printf '%03o' $(( b ^ o )))")"
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
 case "${1:-bootstrap}" in
   bootstrap) bootstrap ;;
   show) shift; show "$@" ;;
   openbao) openbao ;;
+  recover)
+    # The init image has neither the bao client nor the keys volume.
+    if command -v bao >/dev/null 2>&1; then recover
+    else die "recover runs in another service: docker compose run --rm openbao-recover"; fi ;;
   *) die "unknown command $1 (see the top of init/init.sh)" ;;
 esac

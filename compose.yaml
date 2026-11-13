@@ -247,13 +247,16 @@ services:
     restart: unless-stopped
     # Not root, so the entrypoint of the image does not try to change the owner of the data directory.
     user: "100:1000"
-    command: ["server", "-config=/openbao/server.hcl"]
+    # run.sh starts the server and restarts it while openbao-recover holds the recovery listener open.
+    entrypoint: ["/usr/bin/dumb-init", "--", "/bin/sh", "/openbao/run.sh"]
     environment:
       BAO_ADDR: https://127.0.0.1:8200
       BAO_CACERT: /openbao/tls/ca.crt
     volumes:
       - openbao-data:/openbao/file
       - ./openbao/server.hcl:/openbao/server.hcl:ro
+      - ./openbao/run.sh:/openbao/run.sh:ro
+      - openbao-recovery:/openbao/recovery:ro
       - type: volume
         source: secrets
         target: /openbao/tls
@@ -304,6 +307,38 @@ services:
       start_period: 5s
     depends_on:
       <<: *depends-init
+      openbao: {condition: service_healthy}
+
+  # docker compose run --rm openbao-recover: a new provisioner token when it expired (OpenBao down for more than 32 days) or was lost
+  # (README, OpenBao after a restart). Joins the network of the openbao container to reach its recovery listener on loopback;
+  # the unseal key is mounted here and in openbao-unseal only. Not started by `up`.
+  openbao-recover:
+    <<: [*third-party, *hardened]
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
+    profiles: [recover]
+    restart: "no"
+    entrypoint: ["/bin/sh", "/init/init.sh", "recover"]
+    user: "0:0"
+    read_only: true
+    tmpfs: ["/tmp"]
+    network_mode: service:openbao
+    environment:
+      BAO_ADDR: https://127.0.0.1:8200
+    volumes:
+      - openbao-keys:/keys
+      - openbao-recovery:/recovery
+      - ./init/init.sh:/init/init.sh:ro
+      - type: volume
+        source: secrets
+        target: /approle
+        read_only: true
+        volume: {subpath: openbao-approle}
+      - type: volume
+        source: secrets
+        target: /trust
+        read_only: true
+        volume: {subpath: pki/trust}
+    depends_on:
       openbao: {condition: service_healthy}
 
   # The gateway's own setup (passwords of its PostgreSQL and Redis, the Redis configuration and ACL, internal JWT keys, cursor
@@ -643,6 +678,7 @@ networks:
 volumes:
   secrets:
   openbao-keys:
+  openbao-recovery:
   openbao-data:
   keycloak-db:
   gateway-db:

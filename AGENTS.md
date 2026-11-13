@@ -28,7 +28,7 @@ on this machine. `down -v` deletes all platform data.
 - `init/init.sh`: the single setup entry point. Runs in `init` (checks `certs/`, generates the internal CA, certificates,
   passwords, keys) and as `init.sh openbao` in `openbao-unseal` (initialise, unseal, provision). The OpenBao policies
   `mcp-provisioner` and `mcp-credential-broker` are written here.
-- `openbao/server.hcl`, `keycloak/realm-mcp.json` (imported only when the realm does not exist yet), `keycloak/configure.sh`
+- `openbao/server.hcl`, `openbao/run.sh` (starts the server, restarts it while `openbao-recover` holds the recovery listener open), `keycloak/realm-mcp.json` (imported only when the realm does not exist yet), `keycloak/configure.sh`
   (one-time `keycloak-config`), `nginx/` (`servers.conf.template` is rendered with envsubst at start), `portal/iga-catalog.yaml`.
 - `platform.env`: the committed template users copy to `.env`. `servers.example.yaml`: example MCP server overlay.
 - `.env` and `certs/` (except `.gitkeep`) are git-ignored and hold a real installation's domain, certificates and keys.
