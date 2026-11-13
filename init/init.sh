@@ -401,16 +401,22 @@ provisioner_dead() {
   BAO_TOKEN="$(cat "$keys/provisioner-token")" bao token lookup 2>&1 | grep -q 'permission denied'
 }
 
+# The broker's policy, the AppRole method and the role's settings, with the token in $BAO_TOKEN: root, or the broad token of an
+# installation made before the restriction (narrow_provisioner_policy).
+broker_setup() {
+  broker_policy | bao policy write mcp-credential-broker - >/dev/null || return 1
+  bao auth list -format=json | grep -q '"approle/"' || bao auth enable approle >/dev/null || return 1
+  # The broker keeps one secret_id and logs in with it whenever its token ends, so the secret_id does not expire. Replacing
+  # it is a decision of the operator (README, Rotate the broker's secret_id).
+  bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h >/dev/null || return 1
+  bao write auth/approle/role/mcp-credential-broker/role-id role_id="$(cat /approle/role-id)" >/dev/null || return 1
+}
+
 # mint_provisioner <root token>: everything that needs root. Writes both policies and the broker's AppRole settings, enables AppRole,
 # creates the provisioner token. A release that changes any of these needs one `recover` run (README, Upgrade).
 mint_provisioner() {
   provisioner_policy | BAO_TOKEN="$1" bao policy write mcp-provisioner - >/dev/null || return 1
-  broker_policy | BAO_TOKEN="$1" bao policy write mcp-credential-broker - >/dev/null || return 1
-  BAO_TOKEN="$1" bao auth list -format=json | grep -q '"approle/"' || BAO_TOKEN="$1" bao auth enable approle >/dev/null || return 1
-  # The broker keeps one secret_id and logs in with it whenever its token ends, so the secret_id does not expire. Replacing
-  # it is a decision of the operator (README, Rotate the broker's secret_id).
-  BAO_TOKEN="$1" bao write auth/approle/role/mcp-credential-broker token_policies=mcp-credential-broker token_ttl=1h token_max_ttl=4h >/dev/null || return 1
-  BAO_TOKEN="$1" bao write auth/approle/role/mcp-credential-broker/role-id role_id="$(cat /approle/role-id)" >/dev/null || return 1
+  (BAO_TOKEN="$1"; export BAO_TOKEN; broker_setup) || return 1
   out="$(BAO_TOKEN="$1" bao token create -orphan -policy=mcp-provisioner -period=768h -display-name=provisioner -format=json 2>/dev/null)" || return 1
   tok="$(printf '%s' "$out" | sed -n 's/.*"client_token": *"\([^"]*\)".*/\1/p' | head -1)"
   [ -n "$tok" ] || return 1
@@ -422,11 +428,14 @@ bootstrap_provisioner() {
   mint_provisioner "$(cat "$keys/root-token")"
 }
 
-# An installation made before the restriction holds a token whose policy can still rewrite mcp-provisioner: do it once, with
-# that token, so that the narrowed policy applies from the next request on. A failing capability lookup is an error, not "nothing to do".
+# An installation made before the restriction holds a token that can still write policies and the broker's role: once, with that
+# token, write the broker's policy and role settings of this release (so this upgrade needs no recover run), then narrow
+# mcp-provisioner last, so that the narrowed policy applies from the next request on. A failing capability lookup is an error, not
+# "nothing to do".
 narrow_provisioner_policy() {
   caps="$(bao token capabilities sys/policies/acl/mcp-provisioner 2>/dev/null)" || return 1
   printf '%s' "$caps" | grep -Eq 'create|update' || return 0
+  broker_setup || return 1
   provisioner_policy | bao policy write mcp-provisioner - >/dev/null || return 1
   say "openbao-unseal: policy mcp-provisioner narrowed"
 }
@@ -436,7 +445,10 @@ squeeze() { tr -s ' \t\n' ' ' | sed 's/^ //; s/ $//'; }
 # check_policy <name> <generator>: a policy that is not the one of this release is reported, not rewritten (only root can).
 # Returns 1 when OpenBao could not be asked.
 check_policy() {
-  have="$(bao policy read "$1" 2>/dev/null)" || return 1
+  if ! have="$(bao policy read "$1" 2>/dev/null)"; then
+    [ "$1" != mcp-provisioner ] || say "FAIL policy mcp-provisioner cannot be read (an earlier release denied it): docker compose run --rm openbao-recover"
+    return 1
+  fi
   if [ "$(printf '%s' "$have" | squeeze)" != "$("$2" | squeeze)" ]; then
     say "FAIL policy $1 differs from this release: docker compose run --rm openbao-recover"
     drift=1
@@ -469,7 +481,7 @@ provision() {
   fi
   role="$(bao read -format=json auth/approle/role/mcp-credential-broker 2>/dev/null)" || return 1
   if ! printf '%s' "$role" | tr -d ' \n' | grep -q '"token_policies":\["mcp-credential-broker"\]' \
-     || ! printf '%s' "$role" | tr -d ' \n' | grep -q '"token_ttl":3600' || ! printf '%s' "$role" | tr -d ' \n' | grep -q '"token_max_ttl":14400' \
+     || ! printf '%s' "$role" | tr -d ' \n' | grep -Eq '"token_ttl":3600[,}]' || ! printf '%s' "$role" | tr -d ' \n' | grep -Eq '"token_max_ttl":14400[,}]' \
      || [ "$(bao read -field=role_id auth/approle/role/mcp-credential-broker/role-id 2>/dev/null)" != "$role_id" ]; then
     say "FAIL the broker's AppRole settings differ from this release: docker compose run --rm openbao-recover"
     drift=1
@@ -479,7 +491,11 @@ provision() {
     printf '%s' "$secret_id" | bao write auth/approle/role/mcp-credential-broker/custom-secret-id secret_id=- >/dev/null || return 1
   fi
   if [ -s "$keys/root-token" ]; then
-    BAO_TOKEN="$(cat "$keys/root-token")" bao token revoke -self >/dev/null 2>&1 && rm -f "$keys/root-token" && say "openbao-unseal: root token revoked"
+    rt="$(cat "$keys/root-token")"
+    if BAO_TOKEN="$rt" bao token revoke -self >/dev/null 2>&1 || BAO_TOKEN="$rt" bao token lookup 2>&1 | grep -q 'permission denied'; then
+      rm -f "$keys/root-token"
+      say "openbao-unseal: root token revoked"
+    fi
   fi
   unset BAO_TOKEN
   return 0
@@ -611,9 +627,11 @@ recover() {
     list="$(BAO_TOKEN="$root_token" bao list -format=json auth/token/accessors 2>/dev/null)" || return 1
     [ -n "$me" ] || return 1
     swept=0
+    sweep_failed=0
     for acc in $(printf '%s' "$list" | sed 's/[][",]/ /g'); do
       [ "$acc" = "$me" ] && continue
-      pol="$(BAO_TOKEN="$root_token" bao token lookup -accessor "$acc" 2>/dev/null | sed -n 's/^policies  *//p')"
+      pol="$(BAO_TOKEN="$root_token" bao token lookup -accessor "$acc" 2>/dev/null)" || { sweep_failed=$((sweep_failed + 1)); continue; }
+      pol="$(printf '%s\n' "$pol" | sed -n 's/^policies  *//p')"
       if [ "$pol" = "[root]" ]; then
         BAO_TOKEN="$root_token" bao token revoke -accessor "$acc" >/dev/null 2>&1 || return 1
         swept=$((swept + 1))
@@ -625,7 +643,7 @@ recover() {
   mk /recovery
   if ! mkdir "$lock" 2>/dev/null; then
     age=$(( $(date +%s) - $(stat -c %Y "$lock" 2>/dev/null || echo 0) ))
-    if [ "$age" -gt 600 ]; then rmdir "$lock" 2>/dev/null; mkdir "$lock" || die "cannot take $lock"
+    if [ "$age" -gt 600 ] || [ "$age" -lt 0 ]; then rmdir "$lock" 2>/dev/null; mkdir "$lock" || die "cannot take $lock"
     else die "another recover is running, or one was killed less than 10 minutes ago: wait and run it again"; fi
   fi
 
@@ -680,7 +698,10 @@ recover() {
   revoke_token "$gen_token" || die "could not revoke the generated root token"
   gen_token=""
   sweep_root_tokens || die "could not list or revoke the root tokens of earlier runs"
-  [ "$swept" -eq 0 ] || ok "revoked $swept root token(s) left behind by an earlier run"
+  [ "$swept" -eq 0 ] || ok "revoked $swept root token(s) left behind by an earlier run or created by hand"
+  [ "$sweep_failed" -eq 0 ] || warn "could not look up $sweep_failed token accessor(s) in the sweep (expired in between, or unreadable): run recover again if you doubt"
+  # The initial root token, if provisioning never got to revoke it, was just swept.
+  rm -f "$keys/root-token"
 
   old=""
   provisioner_valid && old="$(cat "$keys/provisioner-token")"
