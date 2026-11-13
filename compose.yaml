@@ -18,8 +18,13 @@
 
 name: mcp-platform
 
+# Every service merges this anchor.
 x-third-party: &third-party
   pull_policy: ${PULL_POLICY:-missing}
+  # nginx logs every request before any login; without a limit here the daemon's defaults (json-file, never trimmed) decide.
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
 
 x-hardened: &hardened
   cap_drop: [ALL]

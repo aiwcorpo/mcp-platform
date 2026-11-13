@@ -13,6 +13,7 @@ services:
   mcp-gitlab:
     image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-server-gitlab:${MCP_GITLAB_VERSION:-2.0.0@sha256:4cb191d84cf4041ec0e30f7911a4898c5cf8fc21e0eef894683a74c0686b0789}
     pull_policy: ${PULL_POLICY:-missing}
+    logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
     restart: unless-stopped
     read_only: true
     cap_drop: [ALL]

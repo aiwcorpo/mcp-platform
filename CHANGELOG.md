@@ -3,6 +3,12 @@
 The bundle follows SemVer; its version is the tag of this repository, and the image versions it defaults to are in
 `compose.yaml` (`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`). Newest first.
 
+## Unreleased
+
+- Every service of `compose.yaml` and `servers.example.yaml` logs with the `json-file` driver, `max-size` 10m and `max-file` 3 (30 MB per
+  container), so the disk under the Docker data root no longer depends on the daemon's log options. A `logging` key in compose overrides a
+  daemon-wide driver such as journald or fluentd for these containers; remove the block if you ship logs through the daemon's driver.
+
 ## 2.1.0 - 2026-11-17
 
 - The aiwcorpo images are pinned by digest like the third-party ones: the defaults are `<tag>@<digest>` (gateway 2.0.1, broker 2.1.0,
