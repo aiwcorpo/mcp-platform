@@ -480,6 +480,9 @@ services:
     image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1@sha256:e3e92ae32c0ab7df59f1b027c4cdd795fa2ff9baa05b9d806c844b178dab8ab6}
     mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
     environment: *gateway-env
+    # No search domains of the host: while a store container is down, the glibc resolver would retry postgres and redis under
+    # them, outside Docker, on this container's way out (egress).
+    dns_search: ["."]
     volumes:
       - ${MCP_SERVER_TRUSTED_CAS_FILE:-/dev/null}:/certs/servers-ca.pem:ro
       - type: volume
