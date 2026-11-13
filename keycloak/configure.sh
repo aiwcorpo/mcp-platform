@@ -25,6 +25,7 @@ if ! KC_CLI_PASSWORD="$KC_BOOTSTRAP_ADMIN_PASSWORD" kc config credentials --serv
   echo "      nginx waits for this service. If the account already has an OTP, start nginx alone (docker compose up -d --no-deps nginx)"
   echo "      and do by hand in the console what this script does (README, the administration consoles):"
   echo "      realm mcp, group mcp-platform-admin: client roles query-groups, query-users, view-users, manage-users of realm-management;"
+  echo "      realm mcp, client security-admin-console: Minimum ACR value mfa (tab Advanced);"
   echo "      realm master: brute force detection with 20 failures, wait increment 30 s, max wait 300 s, quick login check 0 ms and 0 s,"
   echo "      password policy length(12), notUsername, passwordHistory(5),"
   echo "      required action Configure OTP enabled and set as default action, an OTP on every administrator. Then run"
@@ -37,6 +38,11 @@ fi
 kc add-roles -r mcp --gname mcp-platform-admin --cclientid realm-management \
   --rolename query-groups --rolename query-users --rolename view-users --rolename manage-users
 echo "ok    mcp-platform-admin manages users and groups of the realm mcp"
+# That console can make a new member of mcp-platform-admin, so it asks for a fresh login with the OTP (level mfa, maximum age 0)
+# instead of taking an SSO session of any age.
+console_id="$(kc get clients -r mcp -q clientId=security-admin-console --fields id --format csv --noquotes)"
+kc update "clients/$console_id" -r mcp -s 'attributes."minimum.acr.value"=mfa'
+echo "ok    the console of the realm mcp asks for a fresh login with the OTP"
 
 # The master realm gets the rules of the mcp realm, and every administrator there an OTP: new ones at their first login
 # (default action), the bootstrap one at its next.

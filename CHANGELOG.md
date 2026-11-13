@@ -3,6 +3,12 @@
 The bundle follows SemVer; its version is the tag of this repository, and the image versions it defaults to are in
 `compose.yaml` (`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`). Newest first.
 
+## Unreleased
+
+- `keycloak-config` sets the Minimum ACR value `mfa` on the client `security-admin-console` of the realm `mcp`, so the realm's administration
+  console asks for the OTP at every login instead of reusing an SSO session. `keycloak-config` runs once, so an existing installation sets
+  it by hand: realm `mcp`, Clients, `security-admin-console`, Advanced, Minimum ACR value `mfa`.
+
 ## 2.1.0 - 2026-11-17
 
 - The aiwcorpo images are pinned by digest like the third-party ones: the defaults are `<tag>@<digest>` (gateway 2.0.1, broker 2.1.0,
