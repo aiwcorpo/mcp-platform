@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Keycloak counts failed logins per account and locks the account for everyone, after two failures within a second or after ten in
-# a row. One address must not be able to post the login form at that pace; other Keycloak requests stay unlimited.
+# Keycloak counts failed logins per account and locks the account for everyone after 20 in a row. One address must not be able to
+# post the login form at a pace that renews the lock; other Keycloak requests stay unlimited.
 set -uo pipefail
 . "$(dirname "$0")/lib.sh"
 proxy_up
