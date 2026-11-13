@@ -96,9 +96,10 @@ also covers matrix-parameter variants such as `/auth/admin;x/`.
 `keycloak-config` runs once and keeps a marker in the volume. nginx starts only after it succeeded, because the open consoles rely on
 the OTP it requires. If the bootstrap account already had an OTP before it ran, it cannot sign in and says so, and nginx stays down.
 Then start nginx alone (`docker compose up -d --no-deps nginx`) and do its steps by hand in the consoles: in the realm `mcp`, the client roles `query-groups`, `query-users`, `view-users`
-and `manage-users` of `realm-management` for the group `mcp-platform-admin`; in the realm `master`, brute force detection with 10
-failures, the password policy `length(12)`, `notUsername`, `passwordHistory(5)`, the required action Configure OTP enabled and set as
-default action, and an OTP on every administrator. Only then `docker compose run --rm keycloak-config mark-done`, which records that
+and `manage-users` of `realm-management` for the group `mcp-platform-admin`; in the realm `master`, brute force detection with 20
+failures, wait increment 30 s, max wait 300 s, quick login check 0 ms and minimum quick login wait 0 s, the password policy
+`length(12)`, `notUsername`, `passwordHistory(5)`, the required action Configure OTP enabled and set as default action, and an OTP on
+every administrator. Only then `docker compose run --rm keycloak-config mark-done`, which records that
 the run is no longer needed and checks nothing; from then on `docker compose up -d` starts nginx as usual.
 
 ### Users and the two authenticators
@@ -113,7 +114,9 @@ reach the level `mfa`. A user therefore has two entries in the authenticator app
 Authenticator that the portal registers for confirming destructive actions.
 
 Passwords need 12 characters and may not equal the user name or e-mail, the last 5 passwords cannot be reused, and an account is locked
-after 10 failed attempts (`passwordPolicy` and `failureFactor` of the realm).
+for 30 s after 20 failed attempts in a row, longer for every further 20, at most 5 minutes (`passwordPolicy` and the brute force
+settings of the realm). Fast failures alone do not lock (the quick login check is off), so a few wrong passwords sent at once
+cannot lock out a known administrator name; nginx spaces login posts from one address to one every 2 s.
 
 Residual risk: until the first login, whoever knows a user's initial password enrolls the OTP. Give initial passwords out of band, or
 federate the users from your company directory (Keycloak, User federation) so that no initial password exists. Users get access to
@@ -301,7 +304,9 @@ The tarball holds every secret of the platform: keep it where only administrator
 Set `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION` and `MCP_PORTAL_VERSION` in `.env` (deploy the broker and the gateway before the portal)
 and run `docker compose pull && docker compose up -d`. Generated keys and passwords stay. `openbao-unseal` rewrites the OpenBao policy.
 The realm is imported only when it does not exist: later changes of `keycloak/realm-mcp.json` do not reach an existing realm, make them
-in the console. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
+in the console. Installed before the lockout change: in Realm settings, Security defenses, Brute force detection of the realms `mcp`
+and `master`, set Max login failures 20, Wait increment 30 seconds, Max wait 5 minutes, Quick login check milliseconds 0 and Minimum
+quick login wait 0 seconds. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
 
 ## After a host restart
 
