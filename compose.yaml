@@ -120,6 +120,12 @@ services:
     ports:
       - ${MCP_BIND:-0.0.0.0}:${MCP_HTTPS_PORT:-443}:${MCP_HTTPS_PORT:-443}
       - ${MCP_BIND:-0.0.0.0}:${MCP_HTTP_PORT:-80}:${MCP_HTTP_PORT:-80}
+    # The upstreams by their fixed addresses on edge, never by a DNS answer: while one of them is stopped, Docker would pass its
+    # name to the host's resolvers, and nginx would send that user's credentials wherever the answer points.
+    extra_hosts:
+      - keycloak=${MCP_EDGE_PREFIX:-172.16.231}.10
+      - gateway=${MCP_EDGE_PREFIX:-172.16.231}.11
+      - portal=${MCP_EDGE_PREFIX:-172.16.231}.12
     networks:
       public: {}
       # The domain name answers inside Docker too, so that a component that is given the public address reaches nginx.
@@ -200,6 +206,7 @@ services:
     networks:
       edge:
         aliases: [keycloak.internal]
+        ipv4_address: ${MCP_EDGE_PREFIX:-172.16.231}.10
       keycloak-stores: {}
     healthcheck:
       # The image has no curl; bash /dev/tcp is enough. The realm answering (not only the readiness endpoint, which is up
@@ -454,6 +461,7 @@ services:
     networks:
       edge:
         aliases: [mcp-gateway.internal]
+        ipv4_address: ${MCP_EDGE_PREFIX:-172.16.231}.11
       servers:
         aliases: [mcp-gateway.internal]
       # Servers on other hosts: the gateway calls them over this network.
@@ -618,7 +626,9 @@ services:
         target: /secrets/portal/env
         read_only: true
         volume: {subpath: portal/env}
-    networks: [edge]
+    networks:
+      edge:
+        ipv4_address: ${MCP_EDGE_PREFIX:-172.16.231}.12
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/actuator/health"]
       interval: 5s
@@ -632,7 +642,13 @@ services:
 
 networks:
   public: {}
-  edge: {internal: true}
+  edge:
+    internal: true
+    # Fixed addresses (nginx extra_hosts) below .128, the rest for Docker to hand out.
+    ipam:
+      config:
+        - subnet: ${MCP_EDGE_PREFIX:-172.16.231}.0/24
+          ip_range: ${MCP_EDGE_PREFIX:-172.16.231}.128/25
   secrets: {internal: true}
   servers: {internal: true}
   keycloak-stores: {internal: true}
