@@ -1,0 +1,19 @@
+name: Change request
+description: A change to the bundle, its defaults or the installation steps.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The situation and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Current workaround

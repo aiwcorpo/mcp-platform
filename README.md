@@ -1,4 +1,30 @@
-# The MCP platform on one Docker host
+# MCP Platform
+
+A self-hosted MCP gateway for a company. Claude Code and other MCP clients use one address, `https://<domain>/mcp`. Every user
+signs in with their own account and an OTP, and the gateway calls the systems behind it with that user's credentials: a personal
+token, OAuth, token exchange or a service account, kept in OpenBao by the credential broker. An administrator approves each tool
+definition and every later change to it, decides with Cedar policies which groups may call which tools, and can stop a server or a
+single tool with a kill switch. Destructive tools wait for a code from the user's authenticator app. Every call ends up in the
+audit log.
+
+![The portal: the servers of one user, the sign-in each needs, its tools with the groups that may call them](docs/portal-servers.png)
+
+Documentation: [mcp.aiwcorpo.pl](https://mcp.aiwcorpo.pl/). To try it on one computer without a domain, see
+[Platform and server on one computer, without a domain](#platform-and-server-on-one-computer-without-a-domain).
+
+| Repository | What |
+| --- | --- |
+| this one | Compose project of the whole platform |
+| [mcp-gateway](https://github.com/aiwcorpo/mcp-gateway) | the MCP endpoint: OAuth, policies, approvals, audit |
+| [mcp-credential-broker](https://github.com/aiwcorpo/mcp-credential-broker) | per-user connections to the systems behind the gateway |
+| [mcp-portal](https://github.com/aiwcorpo/mcp-portal) | self-service portal for users and administrators |
+| [mcp-contracts](https://github.com/aiwcorpo/mcp-contracts) | OpenAPI, JSON Schema, Cedar schema and test vectors shared by the components |
+| [mcp-server-jira](https://github.com/aiwcorpo/mcp-server-jira), [-confluence](https://github.com/aiwcorpo/mcp-server-confluence), [-gitlab](https://github.com/aiwcorpo/mcp-server-gitlab), [-opensearch](https://github.com/aiwcorpo/mcp-server-opensearch), [-servicedesk](https://github.com/aiwcorpo/mcp-server-servicedesk) | MCP servers for those systems |
+| [mcp-server-template](https://github.com/aiwcorpo/mcp-server-template), [mcp-starter-lib](https://github.com/aiwcorpo/mcp-starter-lib) | a new MCP server of your own |
+| [mcp-server-adapter](https://github.com/aiwcorpo/mcp-server-adapter) | a third-party MCP server behind the gateway |
+| [mcp-platform-offline](https://github.com/aiwcorpo/mcp-platform-offline) | image packages for hosts without internet access |
+
+## On one Docker host
 
 Gateway, credential broker, portal, Keycloak and OpenBao with their databases, behind one nginx, as one Compose project on one Linux
 host. Only nginx publishes ports: 443 for all user traffic and 80, which redirects to https. Every internal certificate, password

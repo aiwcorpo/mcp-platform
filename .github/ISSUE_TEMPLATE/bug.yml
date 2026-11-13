@@ -1,0 +1,42 @@
+name: Bug
+description: Something in the Compose bundle does not work as the README or the documentation says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A bug in the gateway, broker, portal or an MCP server belongs to the repository of that component.
+        Do not paste secrets, tokens, passwords or the contents of the `secrets` volume.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Commit or tag of this repository, and MCP_GATEWAY_VERSION / MCP_PORTAL_VERSION if you changed them.
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: OS, `docker version` and `docker compose version`.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: The commands you ran, from a fresh checkout if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: What happened and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `docker compose logs init` and of the failing service, with secrets removed.
+      render: console
