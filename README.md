@@ -129,6 +129,7 @@ a system through groups (`mcp-<system>-read` and so on, the names the policies o
 | `gateway`, `gateway-postgres`, `gateway-redis`, `gateway-redis-replica` | MCP gateway (the replica is required in production) | edge, servers, egress, gateway-stores |
 | `mcp-credential-broker`, `broker-postgres`, `broker-redis` | credential broker | edge, secrets, broker-stores, egress |
 | `openbao`, `openbao-unseal` | secret store | secrets (reachable by the broker only) |
+| `openbao-recover` | one-off, `docker compose run --rm` only (profile `recover`): new provisioner token | network of `openbao` |
 | `portal` | BFF with the single-page application | edge |
 | `init`, `gateway-init` | one-shot setup (the second one is the gateway's own `init` command) | |
 
@@ -270,11 +271,48 @@ generated secrets. To keep the key off the host: back up `openbao-keys`, delete 
 (`docker compose stop openbao-unseal && docker volume rm mcp-platform_openbao-keys`) and unseal by hand after each start with
 `bao operator unseal` from a shell on the `secrets` network. The broker then fails to start until someone does.
 
-The same service provisions OpenBao (policy, Transit keys, AppRole) with a token of the policy `mcp-provisioner`, which can manage mounts,
-policies and the broker's AppRole but read or write no secret and use no Transit key. The root token exists only until the first provisioning
-has worked with that token, then it is revoked and deleted; the provisioner token (period 768 h) is renewed at every provisioning, which
-runs at every start of the service and every 6 hours. A new root token, if you ever need one, comes from `bao operator generate-root` with
-the unseal key.
+The same service provisions OpenBao (Transit keys, AppRole) with a token of the policy `mcp-provisioner`. That token can create the mounts
+`secret` and `transit` and the two Transit keys, read the two policies and the broker's AppRole settings, check or set the broker's
+secret_id, and read a Raft snapshot. It writes no policy (not even its own) and changes no AppRole setting: the policies
+`mcp-provisioner` and `mcp-credential-broker` and the broker role's settings are written with a root token only, at the first start and by
+`openbao-recover`. What it can do beyond that, and what to protect: with a secret_id of the broker's role it can log in as the broker, so
+it can do everything the broker policy `mcp-credential-broker` allows (`init/init.sh`, `broker_policy`); the Raft snapshot it reads holds every
+secret in encrypted form, and the unseal key is in the same volume, so a reader of `openbao-keys` gets everything. The token is not split
+into a snapshot token and a provisioning token.
+
+Provisioning compares the two policies and the role with the ones of the release. When they differ it prints `FAIL ... differs from this
+release: docker compose run --rm openbao-recover` and leaves them as they are; the broker keeps working on the old policy.
+
+The root token exists only until the first provisioning has worked with that token, then it is revoked and deleted; the provisioner token
+(period 768 h) is renewed at every provisioning, which runs at every start of the service and every 6 hours. An installation made before
+this restriction keeps working: its first provisioning after the upgrade rewrites `mcp-provisioner` with the narrowed policy, and from then
+on the token cannot change it; in the same step that old token writes the broker policy and role settings of this release, so this
+upgrade needs no `openbao-recover` run. Later releases that change the policies do.
+
+The volume `openbao-keys` is root-equivalent: it holds the unseal key and the provisioner token, and `docker compose run --rm
+openbao-recover` (below) turns the unseal key into a root token. Whoever can read it (or the Docker volumes of the host) controls OpenBao
+and every stored credential. Back it up and restrict it like the `secrets` volume.
+
+### When the provisioner token has expired, and after a release that changes a policy
+
+If OpenBao was down for more than 32 days, the token is not renewed and expires; the same happens if `provisioner-token` is lost. With no
+root token left, `openbao-unseal` then logs `FAIL the provisioner token has expired or is lost ...` and does not become healthy. A release
+that changes the broker policy or the role needs the same command once (the `FAIL ... differs from this release` line). Run:
+
+```bash
+docker compose run --rm openbao-recover
+```
+
+(`docker compose run --rm init recover` only prints this command: the `init` image has neither the OpenBao client nor the key volume.)
+OpenBao 2.6 and later hand out a root token only through an authenticated endpoint, unless a listener sets
+`disable_unauthed_generate_root_endpoints = false`. So the command makes `openbao` restart with a second listener on `127.0.0.1:8300`
+inside its own container (reachable by nothing else; `openbao/recovery-listener.hcl`), generates a root token with the unseal key, swaps it
+at once for one that expires in 15 minutes, revokes every other root token (also those a killed earlier run left behind), writes the
+policies, creates a new provisioner token, revokes the root token, closes the listener (a second restart) and runs the provisioning.
+`openbao-unseal` unseals after each restart, so OpenBao is unavailable for a few seconds twice. On a failure the command revokes its
+tokens and removes the listener as well; `openbao/run.sh` ignores the flag file after 10 minutes even when the command was killed (a
+killed run also blocks the next one for those 10 minutes). The command prints `ok` lines and never the tokens. It also works while the
+provisioner token is still valid (it replaces it). It revokes every root token it finds, including one an administrator created by hand.
 
 The broker logs in to OpenBao with a role_id and a secret_id that it reads from its environment. That secret_id does not expire: the broker
 uses it again whenever its token ends, so a lifetime would only switch the broker off. Replacing it is a manual operation, not automated here.
@@ -299,7 +337,7 @@ The tarball holds every secret of the platform: keep it where only administrator
 ## Upgrade
 
 Set `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION` and `MCP_PORTAL_VERSION` in `.env` (deploy the broker and the gateway before the portal)
-and run `docker compose pull && docker compose up -d`. Generated keys and passwords stay. `openbao-unseal` rewrites the OpenBao policy.
+and run `docker compose pull && docker compose up -d`. Generated keys and passwords stay. If the log of `openbao-unseal` shows `FAIL ... differs from this release`, run `docker compose run --rm openbao-recover` once (two short OpenBao restarts); a release that changes the OpenBao policies needs it, an upgrade from before the provisioner restriction does not.
 The realm is imported only when it does not exist: later changes of `keycloak/realm-mcp.json` do not reach an existing realm, make them
 in the console. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
 
