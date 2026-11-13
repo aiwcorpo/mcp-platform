@@ -256,6 +256,7 @@ services:
       - openbao-data:/openbao/file
       - ./openbao/server.hcl:/openbao/server.hcl:ro
       - ./openbao/run.sh:/openbao/run.sh:ro
+      - ./openbao/recovery-listener.hcl:/openbao/recovery-listener.hcl:ro
       - openbao-recovery:/openbao/recovery:ro
       - type: volume
         source: secrets
@@ -317,6 +318,8 @@ services:
     image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2@sha256:5046911075e137e154ce49ab051502f4ec7cf367d484ae4a4dce665d9b90561f
     profiles: [recover]
     restart: "no"
+    # Time for the cleanup (revoke the root token, close the listener) after a stop.
+    stop_grace_period: 5m
     entrypoint: ["/bin/sh", "/init/init.sh", "recover"]
     user: "0:0"
     read_only: true
