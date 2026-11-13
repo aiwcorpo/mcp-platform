@@ -9,8 +9,7 @@ audit log.
 
 ![The portal: the servers of one user, the sign-in each needs, its tools with the groups that may call them](docs/portal-servers.png)
 
-Documentation: [mcp.aiwcorpo.pl](https://mcp.aiwcorpo.pl/). To try it on one computer without a domain, see
-[Platform and server on one computer, without a domain](#platform-and-server-on-one-computer-without-a-domain).
+Documentation: [mcp.aiwcorpo.pl](https://mcp.aiwcorpo.pl/).
 
 | Repository | What |
 | --- | --- |
@@ -23,6 +22,104 @@ Documentation: [mcp.aiwcorpo.pl](https://mcp.aiwcorpo.pl/). To try it on one com
 | [mcp-server-template](https://github.com/aiwcorpo/mcp-server-template), [mcp-starter-lib](https://github.com/aiwcorpo/mcp-starter-lib) | a new MCP server of your own |
 | [mcp-server-adapter](https://github.com/aiwcorpo/mcp-server-adapter) | a third-party MCP server behind the gateway |
 | [mcp-platform-offline](https://github.com/aiwcorpo/mcp-platform-offline) | image packages for hosts without internet access |
+
+## Try it locally
+
+The platform on your own computer, with a certificate your browser and Claude Code trust, no domain needed. It runs on macOS or
+Windows with Docker Desktop and on Linux with Docker Engine (8 GiB of memory for Docker). The name is `mcp.localhost`, which browsers
+and Node resolve to the loopback address. For an MCP server of your own on the same computer, see
+[Platform and server on one computer, without a domain](#platform-and-server-on-one-computer-without-a-domain).
+
+1. Install [mkcert](https://github.com/FiloSottile/mkcert), a tool that makes a local CA and certificates signed by it:
+    - macOS: `brew install mkcert`
+    - Windows: `winget install FiloSottile.mkcert`, or `choco install mkcert`, or `scoop install mkcert`
+    - Linux: your distribution's package, or the binary from the mkcert releases page. For Firefox also install `certutil`
+      (`libnss3-tools` on Debian and Ubuntu).
+2. In the directory of this repository, make the mkcert CA trusted by your system and browsers (it asks for your password or an
+   administrator confirmation):
+
+    ```bash
+    mkcert -install
+    ```
+
+3. Make the certificate for `mcp.localhost` and give the platform the CA that signed it. In a shell on macOS or Linux:
+
+    ```bash
+    mkcert -cert-file certs/tls.crt -key-file certs/tls.key mcp.localhost
+    cp "$(mkcert -CAROOT)/rootCA.pem" certs/company-ca.crt
+    cp platform.env .env
+    ```
+
+    In PowerShell:
+
+    ```powershell
+    mkcert -cert-file certs\tls.crt -key-file certs\tls.key mcp.localhost
+    Copy-Item "$(mkcert -CAROOT)\rootCA.pem" certs\company-ca.crt
+    Copy-Item platform.env .env
+    ```
+
+    `init` needs `company-ca.crt` next to the certificate, because the mkcert CA is not a public one. Keep `rootCA-key.pem` in the
+    same mkcert directory private: whoever has it can issue certificates that your computer trusts.
+
+4. In `.env` set the name and keep the platform on the loopback address:
+
+    ```text
+    MCP_DOMAIN=mcp.localhost
+    MCP_BIND=127.0.0.1
+    ```
+
+    If port 443 or 80 is taken, also set other ports and the matching origin, for example:
+
+    ```text
+    MCP_HTTPS_PORT=8443
+    MCP_HTTP_PORT=8080
+    MCP_PUBLIC_ORIGIN=https://mcp.localhost:8443
+    ```
+
+5. Start, and wait a few minutes until `docker compose ps` shows every service healthy:
+
+    ```bash
+    docker compose up -d
+    ```
+
+    When `init` stops the start, `docker compose logs init` names the problem (a missing file in `certs/`, a certificate that does
+    not name `mcp.localhost`, a missing `company-ca.crt`).
+
+6. Read the initial password of `mcp-admin`:
+
+    ```bash
+    docker compose run --rm init show admin-password
+    ```
+
+    Open `https://mcp.localhost/` (with `:8443`, or your port, when you set one), sign in as `mcp-admin`, then set a new password and
+    an OTP in an authenticator app.
+
+7. Connect Claude Code. It runs on Node, which does not read the system trust store, so point it at the mkcert CA before it
+   starts. On macOS or Linux (put the line in `~/.zshrc` or `~/.bashrc` to keep it):
+
+    ```bash
+    export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
+    ```
+
+    In PowerShell, for the current window, and with `setx` for every window opened later:
+
+    ```powershell
+    $env:NODE_EXTRA_CA_CERTS = "$(mkcert -CAROOT)\rootCA.pem"
+    setx NODE_EXTRA_CA_CERTS "$(mkcert -CAROOT)\rootCA.pem"
+    ```
+
+    Then add the server (with your port after the name when you set one). The two flags name the client that the bundle registers
+    for Claude Code and its fixed callback port (`MCP_CLAUDE_CODE_CALLBACK_PORT`, 33418 by default), which must be free while you
+    sign in. Then sign in with `/mcp` inside `claude`:
+
+    ```bash
+    claude mcp add --transport http --client-id claude-code --callback-port 33418 platform "https://mcp.localhost/mcp"
+    ```
+
+    The portal page "MCP address" shows the same command for your installation.
+
+To remove the installation: `docker compose down -v` deletes its containers and all its data. `mkcert -uninstall` takes the CA out of
+the system trust store again.
 
 ## On one Docker host
 
