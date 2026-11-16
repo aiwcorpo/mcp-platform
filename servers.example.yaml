@@ -50,7 +50,7 @@ services:
       retries: 40
       start_period: 30s
 
-  # Test stack only (profile "stub"): the stub backend of mcp-e2e, built there as stub-backend/target/mcp-stub-backend.jar (make stub-test).
+  # Test stack only (profile "stub"): a stand-in for the backend system, the jar named by MCP_STUB_BACKEND_JAR.
   # It accepts any credential and speaks plain http. Never on a production host.
   stub-backend:
     profiles: [stub]
