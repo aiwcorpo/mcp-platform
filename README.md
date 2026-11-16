@@ -268,8 +268,7 @@ The example is the `mcp-example` image with its stub backend, inside this Docker
     the server needs the JVM trust store that the bundle builds (public CAs, internal CA, `certs/company-ca.crt`); `servers.example.yaml`
     mounts it.
 
-    For a test stack with the stub backend of `mcp-e2e` (`make stub-test` there builds it) also set `COMPOSE_PROFILES=stub`, `MCP_EXAMPLE_URL=http://stub-backend:18081`,
-    `MCP_EXAMPLE_ALLOW_PLAIN_HTTP=true` and `MCP_STUB_BACKEND_JAR=<path of mcp-e2e/stub-backend/target/mcp-stub-backend.jar>`. Then `docker compose up -d`.
+    Then `docker compose up -d`.
 
 2. Add it. The portal (Administration, Servers) or the admin APIs do the same; the calls need a token of a fresh login with OTP
    (`auth_time` within 5 minutes, `acr` `mfa`) and the portal's client certificate, so the portal is the easy way. In order:
