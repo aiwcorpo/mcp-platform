@@ -254,7 +254,7 @@ to the platform host. Nothing else crosses: no client certificate on either side
 The author of the server runs it, the operator of the platform adds its address and approves. Nothing is issued on the platform side
 for the server, and the gateway pulls everything (the certificate, the manifest) and pushes the policy data itself.
 
-The example is the `mcp-example` image with its stub backend, inside this Docker.
+The example is the `mcp-example` image, inside this Docker.
 
 1. Copy `servers.example.yaml` to `servers.yaml`, adapt it, and add it to `.env`:
 
