@@ -26,7 +26,7 @@ services:
       MCP_GATEWAY_JWKS_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/.well-known/mcp-jwks.json
       MCP_CONNECT_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/connections?system={system}
       MCP_ACCEPTED_CREDENTIAL_TYPES: user-secret
-      # API of the backend system, https. Set both in .env for the stub backend below: plain http is for tests only.
+      # API of the backend system, https. MCP_EXAMPLE_ALLOW_PLAIN_HTTP=true is for tests only.
       MCP_EXAMPLE_URL: ${MCP_EXAMPLE_URL:?set MCP_EXAMPLE_URL in .env}
       MCP_EXAMPLE_ALLOW_PLAIN_HTTP: ${MCP_EXAMPLE_ALLOW_PLAIN_HTTP:-false}
     volumes:
@@ -49,21 +49,6 @@ services:
       timeout: 3s
       retries: 40
       start_period: 30s
-
-  # Test stack only (profile "stub"): a stand-in for the backend system, the jar named by MCP_STUB_BACKEND_JAR.
-  # It accepts any credential and speaks plain http. Never on a production host.
-  stub-backend:
-    profiles: [stub]
-    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/eclipse-temurin:25-jre@sha256:78f1f183913482ef390c2722f46c3f0ce76ada341d69590e7c482ec943ee72d5
-    pull_policy: ${PULL_POLICY:-missing}
-    restart: unless-stopped
-    read_only: true
-    cap_drop: [ALL]
-    security_opt: ["no-new-privileges:true"]
-    command: ["java", "-jar", "/app/stub-backend.jar", "--bind", "0.0.0.0", "--port", "18081"]
-    volumes:
-      - ${MCP_STUB_BACKEND_JAR:-./mcp-stub-backend.jar}:/app/stub-backend.jar:ro
-    networks: [servers]
 
 volumes:
   mcp-example-state:
