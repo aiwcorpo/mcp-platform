@@ -444,7 +444,8 @@ to run an image you built yourself), and to stay pinned give the tag with its di
 copy: when it differs from the one in `compose.yaml`, set the variable to the plain tag.
 Images loaded with `docker load` (the packages of `mcp-platform-offline`) keep their tag but not the registry digest, so Compose would try
 to pull them. `compose.offline.yaml` names the same images by tag only; add `COMPOSE_FILE=compose.yaml:compose.offline.yaml` to `.env`
-(separator `;` on Windows). The checksums of the package verify the bytes before they are loaded.
+(separator `;` on Windows). The file also sets `pull_policy: never`, so an image that was not loaded is an error (run the load script of the package) and
+never a pull by tag. Integrity in this flow comes from `SHA256SUMS` of the image files, which `load-images` checks before loading.
 
 ## After a host restart
 

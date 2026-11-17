@@ -9,7 +9,8 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
   portal 2.0.1). A value in `.env` replaces the whole default, so `MCP_GATEWAY_VERSION=2.0.1-local` still runs a local image, now
   without a digest. A registry copy whose digest differs needs the plain tag. `scripts/pin-images.sh` writes the digests at a release.
 - `compose.offline.yaml` (moved here from `mcp-platform-offline`): the same images by tag without digest, for images loaded with
-  `docker load`; use `COMPOSE_FILE=compose.yaml:compose.offline.yaml`. CI checks that it names the same images as `compose.yaml`.
+  `docker load`; use `COMPOSE_FILE=compose.yaml:compose.offline.yaml`. It sets `pull_policy: never`: a missing image is an error, not a pull by tag. CI checks that it names the same images as
+  `compose.yaml` and that every service has that policy.
 - The OpenBao provisioner can no longer write policies or role settings: its token was root in practice. The policies
   `mcp-provisioner` and `mcp-credential-broker` and the broker's AppRole settings are written with the root token only (first start,
   and the new `docker compose run --rm openbao-recover`); provisioning compares them with the release and prints `FAIL` with the

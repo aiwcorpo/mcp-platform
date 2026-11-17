@@ -43,8 +43,9 @@ scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1
 It asks the registry for the digest of each tag and rewrites the three files, or changes nothing when a tag cannot be resolved.
 `scripts/check-image-pins.sh` fails on an image without a digest.
 `compose.offline.yaml` is the exception by design: `docker load` keeps no registry digest, so it names the same images by repository
-and tag (the pinned bytes are checked by the checksums of the offline package). `scripts/check-offline-images.sh` fails when its
-images differ from `compose.yaml` across all profiles, `pin-images.sh` updates its versions, and a new service or a changed
+and tag (integrity in the offline flow comes from `SHA256SUMS` of the image tars, checked by `load-images` before loading), and every
+service in it has `pull_policy: never`, so a missing image fails instead of being pulled by its tag. `scripts/check-offline-images.sh` fails when a service
+lacks that policy or its images differ from `compose.yaml` across all profiles, `pin-images.sh` updates its versions, and a new service or a changed
 third-party tag needs the same change in both files. `mcp-server-example` is the one exception until its image can
 be read anonymously; remove it from the list in that script when it can. For a third-party image, change tag and digest together
 (`docker buildx imagetools inspect <image>:<tag>`). Images are published to ghcr.io only.
