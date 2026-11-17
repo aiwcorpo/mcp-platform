@@ -438,6 +438,10 @@ and run `docker compose pull && docker compose up -d`. After unpacking a new pac
 file, so the old script keeps running until the container is recreated. Generated keys and passwords stay. If the log of `openbao-unseal` shows `FAIL ... differs from this release`, run `docker compose run --rm openbao-recover` once (two short OpenBao restarts); a release that changes the OpenBao policies needs it, an upgrade from before the provisioner restriction does not.
 The realm is imported only when it does not exist: later changes of `keycloak/realm-mcp.json` do not reach an existing realm, make them
 in the console. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
+The defaults in `compose.yaml` are a tag and the digest of the image (`2.0.1@sha256:...`), so a release pulls exactly the images it was
+checked with. A variable replaces the whole default: `MCP_GATEWAY_VERSION=2.0.1-local` pulls or uses that tag without a digest (the way
+to run an image you built yourself), and to stay pinned give the tag with its digest, as in the commented lines of `platform.env`. A copy in your own registry has the digest of the
+copy: when it differs from the one in `compose.yaml`, set the variable to the plain tag.
 
 ## After a host restart
 

@@ -36,9 +36,11 @@ on this machine. `down -v` deletes all platform data.
 
 ## Rules
 
-- Third-party images are pinned by tag and `@sha256:` digest; change both together. The aiwcorpo images use
-  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` with the default in `compose.yaml`; keep the commented
-  defaults in `platform.env` equal. Raise the broker and gateway defaults before or with the portal, never the portal alone.
+- Every image is pinned by tag and `@sha256:` digest; change both together. The aiwcorpo images use
+  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` (and `MCP_EXAMPLE_VERSION`) whose default is
+  `<tag>@<digest>` in `compose.yaml`; keep the commented defaults in `platform.env` equal. Write them with
+  `scripts/pin-images.sh`, never by hand; `scripts/check-image-pins.sh` fails on an image without a digest.
+  Raise the broker and gateway defaults before or with the portal, never the portal alone.
 - `init` must stay idempotent: a second start keeps every generated value and changes nothing. A failed check prints
   `FAIL  <reason>` and stops the start; use the existing `ok`/`new`/`warn`/`fail` helpers for output. Never print a
   generated secret to the log; an operator reads one with
