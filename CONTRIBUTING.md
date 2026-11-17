@@ -33,11 +33,11 @@ change on a real stack, use a separate machine or pass `-p <own name>` and a fre
 ## Images and digests
 
 Every image is pinned by tag and `@sha256:` digest. The aiwcorpo images default to `<tag>@<digest>` in `compose.yaml`
-(`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`, `MCP_EXAMPLE_VERSION`), and the commented lines of `platform.env`
+(`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`, `MCP_GITLAB_VERSION`), and the commented lines of `platform.env`
 show the same values. Never edit them by hand: after the images of a version are on ghcr.io, run
 
 ```bash
-scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1
+scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1 gitlab=2.0.0
 ```
 
 It asks the registry for the digest of each tag and rewrites the three files, or changes nothing when a tag cannot be resolved.
@@ -46,8 +46,7 @@ It asks the registry for the digest of each tag and rewrites the three files, or
 and tag (integrity in the offline flow comes from `SHA256SUMS` of the image tars, checked by `load-images` before loading), and every
 service in it has `pull_policy: never`, so a missing image fails instead of being pulled by its tag. `scripts/check-offline-images.sh` fails when a service
 lacks that policy or its images differ from `compose.yaml` across all profiles, `pin-images.sh` updates its versions, and a new service or a changed
-third-party tag needs the same change in both files. `mcp-server-example` is the one exception until its image can
-be read anonymously; remove it from the list in that script when it can. For a third-party image, change tag and digest together
+third-party tag needs the same change in both files. For a third-party image, change tag and digest together
 (`docker buildx imagetools inspect <image>:<tag>`). Images are published to ghcr.io only.
 
 ## Release

@@ -2,11 +2,11 @@
 # Writes the default tag and digest of the aiwcorpo images into compose.yaml, servers.example.yaml and platform.env, and the tag alone
 # into compose.offline.yaml (docker load keeps no digest).
 # Release step, run by a person after the images of the version are on ghcr.io:
-#   scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1 [example=2.0.0]
+#   scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1 [gitlab=2.0.0]
 # The digest is the one the registry reports for the tag, so a later push to the same tag does not change what the bundle pulls.
 set -eu
 
-[ $# -gt 0 ] || { echo "usage: $0 gateway=<version> broker=<version> portal=<version> [example=<version>]" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: $0 gateway=<version> broker=<version> portal=<version> [gitlab=<version>]" >&2; exit 2; }
 cd "$(dirname "$0")/.."
 
 registry=${MCP_REGISTRY:-ghcr.io/aiwcorpo}
@@ -20,7 +20,7 @@ for arg in "$@"; do
     gateway)  image=mcp-gateway ;;
     broker)   image=mcp-credential-broker ;;
     portal)   image=mcp-portal ;;
-    example)  image=mcp-server-example ;;
+    gitlab)   image=mcp-server-gitlab ;;
     *) echo "unknown image '$name'" >&2; exit 2 ;;
   esac
   case "$version" in

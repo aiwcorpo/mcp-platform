@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 
 envfile=$(mktemp)
 trap 'rm -f "$envfile"' EXIT
-printf 'MCP_DOMAIN=mcp.corp.test\nMCP_EXAMPLE_URL=https://backend.corp.test\n' > "$envfile"
+printf 'MCP_DOMAIN=mcp.corp.test\nMCP_GITLAB_URL=https://gitlab.corp.test\n' > "$envfile"
 
 echo "compose.yaml"
 docker compose -p mcp-platform-verify --env-file "$envfile" -f compose.yaml config -q
@@ -16,7 +16,7 @@ docker compose -p mcp-platform-verify --env-file "$envfile" -f compose.yaml -f s
 
 echo "required variables"
 # Without MCP_DOMAIN the render must fail: the check that nobody starts the bundle with an empty domain.
-printf 'MCP_EXAMPLE_URL=https://backend.corp.test\n' > "$envfile"
+printf 'MCP_GITLAB_URL=https://gitlab.corp.test\n' > "$envfile"
 if docker compose -p mcp-platform-verify --env-file "$envfile" config -q 2>/dev/null; then
   echo "compose.yaml renders without MCP_DOMAIN" >&2
   exit 1

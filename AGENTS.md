@@ -13,7 +13,7 @@ CI (`.github/workflows/ci.yml`) runs one script, and so should you before a comm
 scripts/verify.sh
 ```
 
-It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_EXAMPLE_URL`, under its own project
+It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_GITLAB_URL`, under its own project
 name), checks that rendering without `MCP_DOMAIN` fails on purpose, runs `sh -n`, `bash -n` and shellcheck on every script, and
 runs `scripts/check-image-pins.sh`, `scripts/check-offline-images.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
 nothing on success.
@@ -41,7 +41,7 @@ on this machine. `down -v` deletes all platform data.
 ## Rules
 
 - Every image is pinned by tag and `@sha256:` digest; change both together. The aiwcorpo images use
-  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` (and `MCP_EXAMPLE_VERSION`) whose default is
+  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` (and `MCP_GITLAB_VERSION`) whose default is
   `<tag>@<digest>` in `compose.yaml`; keep the commented defaults in `platform.env` equal. Write them with
   `scripts/pin-images.sh`, never by hand; `scripts/check-image-pins.sh` fails on an image without a digest.
   Raise the broker and gateway defaults before or with the portal, never the portal alone.

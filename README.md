@@ -255,13 +255,13 @@ to the platform host. Nothing else crosses: no client certificate on either side
 The author of the server runs it, the operator of the platform adds its address and approves. Nothing is issued on the platform side
 for the server, and the gateway pulls everything (the certificate, the manifest) and pushes the policy data itself.
 
-The example is the `mcp-example` image, inside this Docker.
+The example is the GitLab server (`mcp-server-gitlab`), inside this Docker.
 
 1. Copy `servers.example.yaml` to `servers.yaml`, adapt it, and add it to `.env`:
 
     ```bash
     COMPOSE_FILE=compose.yaml:servers.yaml
-    MCP_EXAMPLE_URL=https://backend.corp.test              # the backend system, https
+    MCP_GITLAB_URL=https://gitlab.corp.test                # the GitLab instance root, https, without /api/v4
     ```
 
     The server speaks plain http on the internal `servers` network (`MCP_PLAIN_HTTP=true`), keeps its state in a volume, and fetches the
@@ -273,11 +273,12 @@ The example is the `mcp-example` image, inside this Docker.
 
 2. Add it. The portal (Administration, Servers) or the admin APIs do the same; the calls need a token of a fresh login with OTP
    (`auth_time` within 5 minutes, `acr` `mfa`) and the portal's client certificate, so the portal is the easy way. In order:
-    1. Broker, system: `PUT /v1/admin/systems/example` (`baseUrl`, `adapter`, `supportedTypes`, `defaultType`, `secretScheme`).
-    2. Gateway, server: "Add server" with the address `http://mcp-example:8443/mcp` and "allow plain http" (`POST /admin/v1/servers` with
-       `{"internalUrl": "http://mcp-example:8443/mcp", "allowPlainHttp": true}`). Plain http is for servers on the platform's own Docker
+    1. Broker, system: `PUT /v1/admin/systems/gitlab` (`baseUrl` the GitLab instance, `adapter` `gitlab`, `supportedTypes` `user-oauth` and
+       `user-secret`, `defaultType` `user-oauth`, `secretScheme` `Bearer`).
+    2. Gateway, server: "Add server" with the address `http://mcp-gitlab:8443/mcp` and "allow plain http" (`POST /admin/v1/servers` with
+       `{"internalUrl": "http://mcp-gitlab:8443/mcp", "allowPlainHttp": true}`). Plain http is for servers on the platform's own Docker
        network only; without the flag the gateway refuses the address (`plain_http_not_allowed`). The gateway pulls the manifest and the
-       server appears as `pending_approval`. The `serverId` (`mcp-example`) comes from the manifest.
+       server appears as `pending_approval`. The `serverId` (`mcp-gitlab`) comes from the manifest.
     3. Approve the connection (fresh OTP): for plain http there is nothing to compare. Then the policies (`POST .../policies/approve` with the
        pending `policiesHash`) and the tools. Every tool waits for an administrator, the read-only ones too. Every later change of a policy
        or a tool (the gateway pulls the manifest again every minute or so, and on "refresh") is pending again: while the policies are
@@ -291,9 +292,9 @@ again before every connection of the gateway; private ranges are allowed.
 
 ### Remove an MCP server
 
-1. `DELETE /admin/v1/servers/mcp-example` in the gateway (its tools leave every `tools/list`; approvals, policies and scope mapping
-   entries go with it), and `DELETE /v1/admin/systems/example` in the broker (the users' connections and the client secret go with it).
-2. Remove the service from `servers.yaml` and run `docker compose up -d --remove-orphans`, or `docker compose rm -sf mcp-example`.
+1. `DELETE /admin/v1/servers/mcp-gitlab` in the gateway (its tools leave every `tools/list`; approvals, policies and scope mapping
+   entries go with it), and `DELETE /v1/admin/systems/gitlab` in the broker (the users' connections and the client secret go with it).
+2. Remove the service from `servers.yaml` and run `docker compose up -d --remove-orphans`, or `docker compose rm -sf mcp-gitlab`.
 
 The same address can be added again afterwards.
 
@@ -301,19 +302,19 @@ The same address can be added again afterwards.
 
 The author starts the server from the `deploy/` directory of the server's repository. The platform is not touched.
 
-1. On the server host, fill in `server.env` (`MCP_GATEWAY_JWKS_URI=https://<domain>/.well-known/mcp-jwks.json`, `MCP_CONNECT_URL`, the URL of the
+1. On the server host, fill in `mcp-gitlab.env` (`MCP_GATEWAY_JWKS_URI=https://<domain>/.well-known/mcp-jwks.json`, `MCP_CONNECT_URL`, the URL of the
    backend system) and run `docker compose up -d`. Without a certificate of its own the server generates a self-signed one on its first
    start, keeps it in its state volume and logs the fingerprint:
 
     ```bash
-    docker compose logs mcp-example | grep event=tls_certificate
+    docker compose logs mcp-gitlab | grep event=tls_certificate
     # event=tls_certificate source=generated fingerprint=sha256:9f2c...e1 detail="..."
     ```
 
    The server host must reach `https://<domain>` on 443 and open the server's port (8443) to the platform host only. When the certificate of
    the platform comes from a company CA, the JVM of the server must trust it to fetch the keys: a trust store with that CA
    (`JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=<file> -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=<password>`
-   in `server.env`, the file mounted into the container).
+   in `mcp-gitlab.env`, the file mounted into the container).
 2. The author gives the operator the address, `https://<host name or IP>:8443/mcp`, and the fingerprint.
 3. The operator adds the address in the portal (Administration, Servers, "Add server", fresh OTP). The gateway connects, reads the
    certificate, pulls the manifest, and shows a card with the system, the certificate (subject, issuer, names, validity, fingerprint) and the
