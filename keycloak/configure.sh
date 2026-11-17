@@ -25,7 +25,8 @@ if ! KC_CLI_PASSWORD="$KC_BOOTSTRAP_ADMIN_PASSWORD" kc config credentials --serv
   echo "      nginx waits for this service. If the account already has an OTP, start nginx alone (docker compose up -d --no-deps nginx)"
   echo "      and do by hand in the console what this script does (README, the administration consoles):"
   echo "      realm mcp, group mcp-platform-admin: client roles query-groups, query-users, view-users, manage-users of realm-management;"
-  echo "      realm master: brute force detection with 10 failures, password policy length(12), notUsername, passwordHistory(5),"
+  echo "      realm master: brute force detection with 20 failures, wait increment 30 s, max wait 300 s, quick login check 0 ms and 0 s,"
+  echo "      password policy length(12), notUsername, passwordHistory(5),"
   echo "      required action Configure OTP enabled and set as default action, an OTP on every administrator. Then run"
   echo "      docker compose run --rm keycloak-config mark-done"
   exit 1
@@ -39,7 +40,8 @@ echo "ok    mcp-platform-admin manages users and groups of the realm mcp"
 
 # The master realm gets the rules of the mcp realm, and every administrator there an OTP: new ones at their first login
 # (default action), the bootstrap one at its next.
-kc update realms/master -s bruteForceProtected=true -s failureFactor=10 \
+kc update realms/master -s bruteForceProtected=true -s failureFactor=20 -s waitIncrementSeconds=30 -s maxFailureWaitSeconds=300 \
+  -s quickLoginCheckMilliSeconds=0 -s minimumQuickLoginWaitSeconds=0 \
   -s 'passwordPolicy=length(12) and notUsername and passwordHistory(5)'
 kc update authentication/required-actions/CONFIGURE_TOTP -r master -s enabled=true -s defaultAction=true
 admin_id="$(kc get users -r master -q exact=true -q username="$KC_BOOTSTRAP_ADMIN_USERNAME" --fields id --format csv --noquotes)"
