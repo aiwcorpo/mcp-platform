@@ -36,6 +36,16 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
   reporting), `AGENTS.md` and `CONTRIBUTING.md`.
 - Defaults moved to gateway 2.0.1 (MCP 2026-07-28 fields `ttlMs` and `cacheScope`), broker 2.1.0 and portal 2.1.0 (service account keys
   written from the portal, CC-251, on `mcp-contracts` 7.1.0). Portal 2.1.0 needs broker 2.1.0.
+- nginx limits (security audit 2026-11-13): POSTs to the Keycloak login forms one every 2 s per client address with a queue of 5,
+  portal login start and callback 60 a minute per address with a burst of 30, at most 50 open requests per address; the rest get 429
+  (503 for the open-request limit). Token requests and other portal calls are not counted.
+- Keycloak locks an account for 30 s after 20 failed logins in a row, longer for further failures up to 5 minutes; fast failures alone no
+  longer lock (both realms). An installation from before this change sets it in the console (README, Upgrade).
+- nginx reaches Keycloak, the gateway and the portal at fixed addresses on the network `edge` (`MCP_EDGE_PREFIX`, default `172.16.231`)
+  instead of resolving names per request, so a stopped upstream always gives 502. Upgrade with `docker compose down` once, so that
+  Compose recreates the network with its subnet; pick another prefix when `172.16.231.0/24` is in use on the host.
+- The nginx tmpfs is bounded to 256 MiB and the service has a memory limit (`NGINX_MEM_LIMIT`, default 512 MiB).
+- `tests/`: proxy and Keycloak tests for these limits (`tests/run.sh`, needs Docker).
 
 ## 2.0.0 - 2026-11-09
 
