@@ -445,7 +445,8 @@ file, so the old script keeps running until the container is recreated. Generate
 The realm is imported only when it does not exist: later changes of `keycloak/realm-mcp.json` do not reach an existing realm, make them
 in the console. Installed before the lockout change: in Realm settings, Security defenses, Brute force detection of the realms `mcp`
 and `master`, set Max login failures 20, Wait increment 30 seconds, Max wait 5 minutes, Quick login check milliseconds 0 and Minimum
-quick login wait 0 seconds. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
+quick login wait 0 seconds. Installed before 2.1.0: run `docker compose down` once before `up -d`, so that Compose recreates
+the network `edge` with the fixed subnet nginx uses (`MCP_EDGE_PREFIX`); data stay. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
 The defaults in `compose.yaml` are a tag and the digest of the image (`2.0.1@sha256:...`), so a release pulls exactly the images it was
 checked with. A variable replaces the whole default: `MCP_GATEWAY_VERSION=2.0.1-local` pulls or uses that tag without a digest (the way
 to run an image you built yourself), and to stay pinned give the tag with its digest, as in the commented lines of `platform.env`. A copy in your own registry has the digest of the
