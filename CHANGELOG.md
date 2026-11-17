@@ -3,10 +3,10 @@
 The bundle follows SemVer; its version is the tag of this repository, and the image versions it defaults to are in
 `compose.yaml` (`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`). Newest first.
 
-## Unreleased
+## 2.1.0 - 2026-11-17
 
-- The aiwcorpo images are pinned by digest like the third-party ones: the defaults are `<tag>@<digest>` (gateway 2.0.1, broker 2.0.0,
-  portal 2.0.1). A value in `.env` replaces the whole default, so `MCP_GATEWAY_VERSION=2.0.1-local` still runs a local image, now
+- The aiwcorpo images are pinned by digest like the third-party ones: the defaults are `<tag>@<digest>` (gateway 2.0.1, broker 2.1.0,
+  portal 2.1.0). A value in `.env` replaces the whole default, so `MCP_GATEWAY_VERSION=2.0.1-local` still runs a local image, now
   without a digest. A registry copy whose digest differs needs the plain tag. `scripts/pin-images.sh` writes the digests at a release.
 - `servers.example.yaml` is the GitLab server (`ghcr.io/aiwcorpo/mcp-server-gitlab`, serverId `mcp-gitlab`, system `gitlab`) instead of
   the never published `mcp-server-example`: `MCP_GITLAB_URL` replaces `MCP_EXAMPLE_URL`, `MCP_GITLAB_VERSION` and `MCP_GITLAB_MEM_LIMIT`
@@ -34,7 +34,8 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
   shellchecks the scripts, requires a digest on every image (no exceptions) and rejects no-break spaces and typographic quotes.
 - Added `LICENSE` (Apache-2.0), `NOTICE`, `SECURITY.md`, issue templates (questions go to Discussions, vulnerabilities to private
   reporting), `AGENTS.md` and `CONTRIBUTING.md`.
-- Defaults moved to gateway 2.0.1 (MCP 2026-07-28 fields `ttlMs` and `cacheScope`) and portal 2.0.1 (new icon). The broker stays at 2.0.0.
+- Defaults moved to gateway 2.0.1 (MCP 2026-07-28 fields `ttlMs` and `cacheScope`), broker 2.1.0 and portal 2.1.0 (service account keys
+  written from the portal, CC-251, on `mcp-contracts` 7.1.0). Portal 2.1.0 needs broker 2.1.0.
 
 ## 2.0.0 - 2026-11-09
 

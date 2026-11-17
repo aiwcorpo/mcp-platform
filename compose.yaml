@@ -547,7 +547,7 @@ services:
 
   mcp-credential-broker:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.0.0@sha256:c82aff39220eb965bb1a2c2a31a591a72a8cd826e7c5b4dd2ac6c58d0fea6dca}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.1.0@sha256:e9e0ba9dfb1706443eeac84a4f059ef98f694a0af2d4c3491bb7416f08058e96}
     mem_limit: ${BROKER_MEM_LIMIT:-1g}
     environment:
       <<: *java-env
@@ -610,7 +610,7 @@ services:
   # The single-container "portal" image: the BFF with the single-page application inside.
   portal:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.0.1@sha256:2e707fd20b8f9c4d9850251944fa9f80431a9712b519e3728470d15e7fe64639}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.1.0@sha256:0894b775f6d50214403011ad09f5da35dd3da7b1dd7ba92c53a7290440c42e34}
     mem_limit: ${PORTAL_MEM_LIMIT:-1g}
     environment:
       <<: *java-env
