@@ -337,7 +337,9 @@ The tarball holds every secret of the platform: keep it where only administrator
 ## Upgrade
 
 Set `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION` and `MCP_PORTAL_VERSION` in `.env` (deploy the broker and the gateway before the portal)
-and run `docker compose pull && docker compose up -d`. Generated keys and passwords stay. If the log of `openbao-unseal` shows `FAIL ... differs from this release`, run `docker compose run --rm openbao-recover` once (two short OpenBao restarts); a release that changes the OpenBao policies needs it, an upgrade from before the provisioner restriction does not.
+and run `docker compose pull && docker compose up -d`. After unpacking a new package also run
+`docker compose up -d --force-recreate openbao-unseal`: it runs `init/init.sh` from a bind mount, and Compose does not see a changed
+file, so the old script keeps running until the container is recreated. Generated keys and passwords stay. If the log of `openbao-unseal` shows `FAIL ... differs from this release`, run `docker compose run --rm openbao-recover` once (two short OpenBao restarts); a release that changes the OpenBao policies needs it, an upgrade from before the provisioner restriction does not.
 The realm is imported only when it does not exist: later changes of `keycloak/realm-mcp.json` do not reach an existing realm, make them
 in the console. Closed network: copy the images to your registry and set `MCP_REGISTRY` and `MCP_THIRD_PARTY_REGISTRY` in `.env`.
 
