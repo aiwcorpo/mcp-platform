@@ -7,16 +7,17 @@ in README). `mcp-platform-offline` packages the images this file names. Operator
 
 ## Checks
 
-There is no CI workflow and no build. Before a commit run, with a throwaway env file outside the repository:
+CI (`.github/workflows/ci.yml`) runs one script, and so should you before a commit:
 
 ```bash
-envfile=$(mktemp) && printf 'MCP_DOMAIN=mcp.corp.test\n' > "$envfile"
-docker compose --env-file "$envfile" config -q
-sh -n init/init.sh && bash -n keycloak/configure.sh
+scripts/verify.sh
 ```
 
-`config -q` prints nothing on success; without `MCP_DOMAIN` it fails on purpose. To check the server overlay add
-`-f compose.yaml -f servers.example.yaml` and `MCP_EXAMPLE_URL=https://backend.corp.test` to the env file.
+It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_EXAMPLE_URL`, under its own project
+name), checks that rendering without `MCP_DOMAIN` fails on purpose, runs `sh -n`, `bash -n` and shellcheck on every script, and
+runs `scripts/check-image-pins.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
+nothing on success.
+
 Do not run `docker compose up`, `down`, `restart`, `pull` or `run`: `compose.yaml` fixes the project name to
 `mcp-platform`, so from any checkout or worktree these act on the same containers and volumes as a real installation
 on this machine. `down -v` deletes all platform data.
@@ -62,5 +63,5 @@ anything from `certs/`, generated passwords, tokens, keys, internal host names o
 ## Pull requests
 
 One change per PR. Commit subject in English, imperative, up to 72 characters; the body says what changed and why (link the
-component issue when a default version moves). The checks above must pass. There is no CONTRIBUTING.md or CHANGELOG in this
-repository; SECURITY.md says which reports belong here.
+component issue when a default version moves). The checks above must pass. User-visible changes go under `## Unreleased` in
+[CHANGELOG.md](CHANGELOG.md); [CONTRIBUTING.md](CONTRIBUTING.md) has the release steps; SECURITY.md says which reports belong here.
