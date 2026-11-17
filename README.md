@@ -442,6 +442,9 @@ The defaults in `compose.yaml` are a tag and the digest of the image (`2.0.1@sha
 checked with. A variable replaces the whole default: `MCP_GATEWAY_VERSION=2.0.1-local` pulls or uses that tag without a digest (the way
 to run an image you built yourself), and to stay pinned give the tag with its digest, as in the commented lines of `platform.env`. A copy in your own registry has the digest of the
 copy: when it differs from the one in `compose.yaml`, set the variable to the plain tag.
+Images loaded with `docker load` (the packages of `mcp-platform-offline`) keep their tag but not the registry digest, so Compose would try
+to pull them. `compose.offline.yaml` names the same images by tag only; add `COMPOSE_FILE=compose.yaml:compose.offline.yaml` to `.env`
+(separator `;` on Windows). The checksums of the package verify the bytes before they are loaded.
 
 ## After a host restart
 

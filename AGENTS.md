@@ -15,7 +15,7 @@ scripts/verify.sh
 
 It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_EXAMPLE_URL`, under its own project
 name), checks that rendering without `MCP_DOMAIN` fails on purpose, runs `sh -n`, `bash -n` and shellcheck on every script, and
-runs `scripts/check-image-pins.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
+runs `scripts/check-image-pins.sh`, `scripts/check-offline-images.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
 nothing on success.
 
 Do not run `docker compose up`, `down`, `restart`, `pull` or `run`: `compose.yaml` fixes the project name to
@@ -31,6 +31,9 @@ on this machine. `down -v` deletes all platform data.
   `mcp-provisioner` and `mcp-credential-broker` are written here.
 - `openbao/server.hcl`, `openbao/run.sh` and `openbao/recovery-listener.hcl` (the server starts through run.sh, which restarts it with the listener while `openbao-recover` runs), `keycloak/realm-mcp.json` (imported only when the realm does not exist yet), `keycloak/configure.sh`
   (one-time `keycloak-config`), `nginx/` (`servers.conf.template` is rendered with envsubst at start), `portal/iga-catalog.yaml`.
+- `compose.offline.yaml`: the same images by repository and tag without digest, for hosts that load images with `docker load`.
+  `scripts/check-offline-images.sh` fails when it names other images than `compose.yaml`; `scripts/pin-images.sh` updates the
+  versions in it. A new service or a changed third-party tag needs the matching change there.
 - `platform.env`: the committed template users copy to `.env`. `servers.example.yaml`: example MCP server overlay.
 - `.env` and `certs/` (except `.gitkeep`) are git-ignored and hold a real installation's domain, certificates and keys.
   Never read, print or commit them.

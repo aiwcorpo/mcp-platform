@@ -22,8 +22,8 @@ scripts/verify.sh
 ```
 
 CI runs exactly this script. It renders `compose.yaml` alone and with `servers.example.yaml` (dummy values, own project name),
-checks that a missing `MCP_DOMAIN` fails, runs `sh -n`, `bash -n` and shellcheck on the scripts, requires a digest on every image
-and rejects no-break spaces and typographic quotes. Without shellcheck installed the script skips it; CI does not.
+checks that a missing `MCP_DOMAIN` fails, runs `sh -n`, `bash -n` and shellcheck on the scripts, requires a digest on every image,
+checks `compose.offline.yaml` against `compose.yaml` and rejects no-break spaces and typographic quotes. Without shellcheck installed the script skips it; CI does not.
 
 Do not run `docker compose up`, `down`, `restart`, `pull` or `run` for a check. `compose.yaml` fixes the project name to
 `mcp-platform`, so from any checkout these act on the containers and volumes of an installation on the same machine. To try a
@@ -41,7 +41,11 @@ scripts/pin-images.sh gateway=2.0.1 broker=2.0.0 portal=2.0.1
 ```
 
 It asks the registry for the digest of each tag and rewrites the three files, or changes nothing when a tag cannot be resolved.
-`scripts/check-image-pins.sh` fails on an image without a digest. `mcp-server-example` is the one exception until its image can
+`scripts/check-image-pins.sh` fails on an image without a digest.
+`compose.offline.yaml` is the exception by design: `docker load` keeps no registry digest, so it names the same images by repository
+and tag (the pinned bytes are checked by the checksums of the offline package). `scripts/check-offline-images.sh` fails when its
+images differ from `compose.yaml` across all profiles, `pin-images.sh` updates its versions, and a new service or a changed
+third-party tag needs the same change in both files. `mcp-server-example` is the one exception until its image can
 be read anonymously; remove it from the list in that script when it can. For a third-party image, change tag and digest together
 (`docker buildx imagetools inspect <image>:<tag>`). Images are published to ghcr.io only.
 
@@ -54,8 +58,8 @@ A person does these steps; an agent does not tag, release or change the default 
 2. Run `scripts/pin-images.sh` with those versions, then `scripts/verify.sh`. Review the diff of `compose.yaml` and `platform.env`.
 3. In `CHANGELOG.md` rename `## Unreleased` to `## <version> - <date>`.
 4. Merge, then tag `v<version>` on main.
-5. Refresh the offline package: `aiwcorpo/mcp-platform-offline` packs the images named in `compose.yaml` and needs the new
-   version and digests.
+5. Refresh the offline package: `aiwcorpo/mcp-platform-offline` packs the images named in `compose.yaml` and ships
+   `compose.offline.yaml` from this repository; it needs the new versions.
 
 ## License
 
