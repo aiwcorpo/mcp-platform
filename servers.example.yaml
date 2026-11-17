@@ -27,7 +27,8 @@ services:
       MCP_PLAIN_HTTP: "true"
       MCP_GATEWAY_JWKS_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/.well-known/mcp-jwks.json
       MCP_CONNECT_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/connections?system={system}
-      MCP_ACCEPTED_CREDENTIAL_TYPES: user-oauth,user-secret
+      # A personal access token that the user enters in the portal; add user-oauth only with an OAuth client on the platform (README).
+      MCP_ACCEPTED_CREDENTIAL_TYPES: user-secret
       # GitLab instance root, https, without /api/v4. MCP_GITLAB_ALLOW_PLAIN_HTTP=true is for tests only.
       MCP_GITLAB_URL: ${MCP_GITLAB_URL:?set MCP_GITLAB_URL in .env}
       MCP_GITLAB_ALLOW_PLAIN_HTTP: ${MCP_GITLAB_ALLOW_PLAIN_HTTP:-false}

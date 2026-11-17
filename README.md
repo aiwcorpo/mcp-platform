@@ -273,8 +273,10 @@ The example is the GitLab server (`mcp-server-gitlab`), inside this Docker.
 
 2. Add it. The portal (Administration, Servers) or the admin APIs do the same; the calls need a token of a fresh login with OTP
    (`auth_time` within 5 minutes, `acr` `mfa`) and the portal's client certificate, so the portal is the easy way. In order:
-    1. Broker, system: `PUT /v1/admin/systems/gitlab` (`baseUrl` the GitLab instance, `adapter` `gitlab`, `supportedTypes` `user-oauth` and
-       `user-secret`, `defaultType` `user-oauth`, `secretScheme` `Bearer`).
+    1. Broker, system: `PUT /v1/admin/systems/gitlab` (`baseUrl` the GitLab instance, `adapter` `gitlab`, `supportedTypes` and `defaultType`
+       `user-secret`, `secretScheme` `Bearer`). Each user then connects a GitLab personal access token in the portal. `user-oauth` is
+       possible too (add it to `MCP_ACCEPTED_CREDENTIAL_TYPES` and to the system); it needs an OAuth application registered in GitLab and
+       the `oauth` block of the system, described in `deploy/README.md` of `mcp-server-gitlab`.
     2. Gateway, server: "Add server" with the address `http://mcp-gitlab:8443/mcp` and "allow plain http" (`POST /admin/v1/servers` with
        `{"internalUrl": "http://mcp-gitlab:8443/mcp", "allowPlainHttp": true}`). Plain http is for servers on the platform's own Docker
        network only; without the flag the gateway refuses the address (`plain_http_not_allowed`). The gateway pulls the manifest and the

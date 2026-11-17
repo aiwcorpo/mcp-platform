@@ -10,7 +10,7 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
   without a digest. A registry copy whose digest differs needs the plain tag. `scripts/pin-images.sh` writes the digests at a release.
 - `servers.example.yaml` is the GitLab server (`ghcr.io/aiwcorpo/mcp-server-gitlab`, serverId `mcp-gitlab`, system `gitlab`) instead of
   the never published `mcp-server-example`: `MCP_GITLAB_URL` replaces `MCP_EXAMPLE_URL`, `MCP_GITLAB_VERSION` and `MCP_GITLAB_MEM_LIMIT`
-  replace the `MCP_EXAMPLE_*` ones, and the credential types are `user-oauth` and `user-secret`. The image is pinned by digest too
+  replace the `MCP_EXAMPLE_*` ones, and the credential type is `user-secret` (a GitLab personal access token; `user-oauth` needs an OAuth client). The image is pinned by digest too
   (2.0.0). README, "Add an MCP server", uses the new names; an existing `servers.yaml` that is a copy of the old file keeps working only
   with an image you built yourself.
 - `compose.offline.yaml` (moved here from `mcp-platform-offline`): the same images by tag without digest, for images loaded with
