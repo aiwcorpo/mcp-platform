@@ -1,0 +1,20 @@
+# Runs scripts/verify.sh on every push to main and on pull requests: the Compose files render, the scripts parse and pass
+# shellcheck, every image carries a digest. Nothing is started, published or pulled, and no secret is used.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: scripts/verify.sh
+        env:
+          REQUIRE_SHELLCHECK: '1'

@@ -1,0 +1,65 @@
+# Images loaded with docker load (load-images.sh / load-images.ps1) carry their tag but, on the classic image store of Docker
+# Engine, not the registry digest that compose.yaml pins, so compose.yaml alone would try to pull them. This file names the
+# same images by tag. The pinned bytes are checked once, by SHA256SUMS of the image files, before they are loaded.
+# The aiwcorpo images are named by their version only, for the same reason. scripts/check-offline-images.sh fails when this file and
+# compose.yaml name different images, and scripts/pin-images.sh keeps the versions equal.
+# pull_policy: never makes a missing image an error instead of a pull by tag, so nothing but the checksummed package is ever used.
+# Use it with COMPOSE_FILE=compose.yaml:compose.offline.yaml in .env (on Windows the separator is ';').
+x-offline-postgres: &postgres ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/postgres:18.6-alpine
+x-offline-redis: &redis ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/redis:8.8.4-alpine
+x-offline-keycloak: &keycloak ${MCP_THIRD_PARTY_REGISTRY:-quay.io/keycloak}/keycloak:26.8.1
+x-offline-openbao: &openbao ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2
+x-offline-gateway: &gateway ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1}
+
+services:
+  init:
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/eclipse-temurin:25-jre
+    pull_policy: never
+  nginx:
+    image: ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/nginx:1.27-alpine
+    pull_policy: never
+  keycloak:
+    image: *keycloak
+    pull_policy: never
+  keycloak-config:
+    image: *keycloak
+    pull_policy: never
+  keycloak-postgres:
+    image: *postgres
+    pull_policy: never
+  openbao:
+    image: *openbao
+    pull_policy: never
+  openbao-unseal:
+    image: *openbao
+    pull_policy: never
+  openbao-recover:
+    image: *openbao
+    pull_policy: never
+  gateway-postgres:
+    image: *postgres
+    pull_policy: never
+  gateway-redis:
+    image: *redis
+    pull_policy: never
+  gateway-redis-replica:
+    image: *redis
+    pull_policy: never
+  broker-postgres:
+    image: *postgres
+    pull_policy: never
+  broker-redis:
+    image: *redis
+    pull_policy: never
+  gateway:
+    image: *gateway
+    pull_policy: never
+  gateway-init:
+    image: *gateway
+    pull_policy: never
+  mcp-credential-broker:
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.0.0}
+    pull_policy: never
+  portal:
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.0.1}
+    pull_policy: never

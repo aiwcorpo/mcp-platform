@@ -1,15 +1,17 @@
-# One MCP server inside this Docker, as an example. Copy this file to servers.yaml, change the names, and add it to .env:
+# One MCP server inside this Docker, as an example: the GitLab server. Copy this file to servers.yaml, change the names, and add it
+# to .env:
 #   COMPOSE_FILE=compose.yaml:servers.yaml
 # The server speaks plain http on the "servers" network (MCP_PLAIN_HTTP): that network is internal and holds only the gateway, nginx and
-# the servers. The administrator adds it in the portal as http://mcp-example:8443/mcp with "allow plain http" (README, Add an MCP server).
+# the servers. The administrator adds it in the portal as http://mcp-gitlab:8443/mcp with "allow plain http" (README, Add an MCP server).
 # A server on another host is not part of this file: it runs from the deploy/ directory of its repository (README, MCP server on
 # another host).
-# This file shows the server of the mcp-server-example image (serverId mcp-example, system example). A server from another image
-# has its own serverId and settings; the backend settings (MCP_EXAMPLE_*) are named after the system.
+# This file shows the server of the mcp-server-gitlab image (serverId mcp-gitlab, system gitlab); its own deploy/ directory is the
+# source of the settings. A server from another image has its own serverId and settings; the backend settings (MCP_GITLAB_*) are
+# named after the system.
 
 services:
-  mcp-example:
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-server-example:${MCP_EXAMPLE_VERSION:-2.0.0}
+  mcp-gitlab:
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-server-gitlab:${MCP_GITLAB_VERSION:-2.0.0@sha256:4cb191d84cf4041ec0e30f7911a4898c5cf8fc21e0eef894683a74c0686b0789}
     pull_policy: ${PULL_POLICY:-missing}
     restart: unless-stopped
     read_only: true
@@ -17,7 +19,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     # cedar-java unpacks its native library at start.
     tmpfs: ["/tmp:exec"]
-    mem_limit: ${MCP_EXAMPLE_MEM_LIMIT:-1g}
+    mem_limit: ${MCP_GITLAB_MEM_LIMIT:-1g}
     environment:
       # The JVM trust store of the platform (public CAs, the internal CA, certs/company-ca.crt): the public keys of the gateway are
       # fetched from https://<domain>, which reaches nginx under its network alias and presents the certificate of certs/tls.crt.
@@ -25,13 +27,14 @@ services:
       MCP_PLAIN_HTTP: "true"
       MCP_GATEWAY_JWKS_URI: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/.well-known/mcp-jwks.json
       MCP_CONNECT_URL: ${MCP_PUBLIC_ORIGIN:-https://${MCP_DOMAIN}}/connections?system={system}
+      # A personal access token that the user enters in the portal; add user-oauth only with an OAuth client on the platform (README).
       MCP_ACCEPTED_CREDENTIAL_TYPES: user-secret
-      # API of the backend system, https. MCP_EXAMPLE_ALLOW_PLAIN_HTTP=true is for tests only.
-      MCP_EXAMPLE_URL: ${MCP_EXAMPLE_URL:?set MCP_EXAMPLE_URL in .env}
-      MCP_EXAMPLE_ALLOW_PLAIN_HTTP: ${MCP_EXAMPLE_ALLOW_PLAIN_HTTP:-false}
+      # GitLab instance root, https, without /api/v4. MCP_GITLAB_ALLOW_PLAIN_HTTP=true is for tests only.
+      MCP_GITLAB_URL: ${MCP_GITLAB_URL:?set MCP_GITLAB_URL in .env}
+      MCP_GITLAB_ALLOW_PLAIN_HTTP: ${MCP_GITLAB_ALLOW_PLAIN_HTTP:-false}
     volumes:
       # Paging cursor key and the generated certificate (unused with plain http) stay between starts.
-      - mcp-example-state:/var/lib/mcp/state
+      - mcp-gitlab-state:/var/lib/mcp/state
       - type: volume
         source: secrets
         target: /certs/trust
@@ -40,7 +43,7 @@ services:
     networks:
       # The gateway calls the server by this name; egress is the way to the backend.
       servers:
-        aliases: [mcp-example]
+        aliases: [mcp-gitlab]
       egress: {}
     healthcheck:
       # An open port is the signal: every path except /actuator/health needs a token, and the image has no HTTP client.
@@ -51,4 +54,4 @@ services:
       start_period: 30s
 
 volumes:
-  mcp-example-state:
+  mcp-gitlab-state:

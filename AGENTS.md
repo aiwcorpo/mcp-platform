@@ -7,16 +7,17 @@ in README). `mcp-platform-offline` packages the images this file names. Operator
 
 ## Checks
 
-There is no CI workflow and no build. Before a commit run, with a throwaway env file outside the repository:
+CI (`.github/workflows/ci.yml`) runs one script, and so should you before a commit:
 
 ```bash
-envfile=$(mktemp) && printf 'MCP_DOMAIN=mcp.corp.test\n' > "$envfile"
-docker compose --env-file "$envfile" config -q
-sh -n init/init.sh && bash -n keycloak/configure.sh
+scripts/verify.sh
 ```
 
-`config -q` prints nothing on success; without `MCP_DOMAIN` it fails on purpose. To check the server overlay add
-`-f compose.yaml -f servers.example.yaml` and `MCP_EXAMPLE_URL=https://backend.corp.test` to the env file.
+It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_GITLAB_URL`, under its own project
+name), checks that rendering without `MCP_DOMAIN` fails on purpose, runs `sh -n`, `bash -n` and shellcheck on every script, and
+runs `scripts/check-image-pins.sh`, `scripts/check-offline-images.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
+nothing on success.
+
 Do not run `docker compose up`, `down`, `restart`, `pull` or `run`: `compose.yaml` fixes the project name to
 `mcp-platform`, so from any checkout or worktree these act on the same containers and volumes as a real installation
 on this machine. `down -v` deletes all platform data.
@@ -30,15 +31,20 @@ on this machine. `down -v` deletes all platform data.
   `mcp-provisioner` and `mcp-credential-broker` are written here.
 - `openbao/server.hcl`, `openbao/run.sh` and `openbao/recovery-listener.hcl` (the server starts through run.sh, which restarts it with the listener while `openbao-recover` runs), `keycloak/realm-mcp.json` (imported only when the realm does not exist yet), `keycloak/configure.sh`
   (one-time `keycloak-config`), `nginx/` (`servers.conf.template` is rendered with envsubst at start), `portal/iga-catalog.yaml`.
+- `compose.offline.yaml`: the same images by repository and tag without digest, for hosts that load images with `docker load`.
+  `scripts/check-offline-images.sh` fails when it names other images than `compose.yaml`; `scripts/pin-images.sh` updates the
+  versions in it. A new service or a changed third-party tag needs the matching change there.
 - `platform.env`: the committed template users copy to `.env`. `servers.example.yaml`: example MCP server overlay.
 - `.env` and `certs/` (except `.gitkeep`) are git-ignored and hold a real installation's domain, certificates and keys.
   Never read, print or commit them.
 
 ## Rules
 
-- Third-party images are pinned by tag and `@sha256:` digest; change both together. The aiwcorpo images use
-  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` with the default in `compose.yaml`; keep the commented
-  defaults in `platform.env` equal. Raise the broker and gateway defaults before or with the portal, never the portal alone.
+- Every image is pinned by tag and `@sha256:` digest; change both together. The aiwcorpo images use
+  `MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION` (and `MCP_GITLAB_VERSION`) whose default is
+  `<tag>@<digest>` in `compose.yaml`; keep the commented defaults in `platform.env` equal. Write them with
+  `scripts/pin-images.sh`, never by hand; `scripts/check-image-pins.sh` fails on an image without a digest.
+  Raise the broker and gateway defaults before or with the portal, never the portal alone.
 - `init` must stay idempotent: a second start keeps every generated value and changes nothing. A failed check prints
   `FAIL  <reason>` and stops the start; use the existing `ok`/`new`/`warn`/`fail` helpers for output. Never print a
   generated secret to the log; an operator reads one with
@@ -60,5 +66,5 @@ anything from `certs/`, generated passwords, tokens, keys, internal host names o
 ## Pull requests
 
 One change per PR. Commit subject in English, imperative, up to 72 characters; the body says what changed and why (link the
-component issue when a default version moves). The checks above must pass. There is no CONTRIBUTING.md or CHANGELOG in this
-repository; SECURITY.md says which reports belong here.
+component issue when a default version moves). The checks above must pass. User-visible changes go under `## Unreleased` in
+[CHANGELOG.md](CHANGELOG.md); [CONTRIBUTING.md](CONTRIBUTING.md) has the release steps; SECURITY.md says which reports belong here.
