@@ -5,6 +5,12 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
 
 ## Unreleased
 
+- The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
+  names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
+  upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
+- `keycloak-config` sets the Minimum ACR value `mfa` on the client `security-admin-console` of the realm `mcp`, so the realm's administration
+  console asks for the OTP at every login instead of reusing an SSO session. `keycloak-config` runs once, so an existing installation sets
+  it by hand: realm `mcp`, Clients, `security-admin-console`, Advanced, Minimum ACR value `mfa`.
 - Every service of `compose.yaml` and `servers.example.yaml` logs with the `json-file` driver, `max-size` 10m and `max-file` 3 (30 MB per
   container), so the disk under the Docker data root no longer depends on the daemon's log options. A `logging` key in compose overrides a
   daemon-wide driver such as journald or fluentd for these containers; remove the block if you ship logs through the daemon's driver.

@@ -180,7 +180,7 @@ broker is still starting.
     authenticator app). Then `https://<domain>/` is the portal. The administration of servers and policies asks for a fresh login with the OTP.
 
 Platform administrators (group `mcp-platform-admin`) manage users and groups in the console of their own realm,
-`https://<domain>/auth/admin/mcp/console/`, signing in with their usual account and OTP. The bootstrap account of the master realm
+`https://<domain>/auth/admin/mcp/console/`, signing in with their usual account and a fresh OTP (the console takes no older login). The bootstrap account of the master realm
 (`docker compose run --rm init show keycloak-admin`) is for emergencies: the one-time `keycloak-config` service
 (`keycloak/configure.sh`) makes it enroll an OTP at its next login and gives the master realm the password policy and lockout of the
 realm `mcp`, with an OTP as a default required action for any administrator created there. Whoever signs in first with the bootstrap
@@ -193,7 +193,8 @@ also covers matrix-parameter variants such as `/auth/admin;x/`.
 `keycloak-config` runs once and keeps a marker in the volume. nginx starts only after it succeeded, because the open consoles rely on
 the OTP it requires. If the bootstrap account already had an OTP before it ran, it cannot sign in and says so, and nginx stays down.
 Then start nginx alone (`docker compose up -d --no-deps nginx`) and do its steps by hand in the consoles: in the realm `mcp`, the client roles `query-groups`, `query-users`, `view-users`
-and `manage-users` of `realm-management` for the group `mcp-platform-admin`; in the realm `master`, brute force detection with 20
+and `manage-users` of `realm-management` for the group `mcp-platform-admin` and the Minimum ACR value `mfa` of the client
+`security-admin-console`; in the realm `master`, brute force detection with 20
 failures, wait increment 30 s, max wait 300 s, quick login check 0 ms and minimum quick login wait 0 s, the password policy
 `length(12)`, `notUsername`, `passwordHistory(5)`, the required action Configure OTP enabled and set as default action, and an OTP on
 every administrator. Only then `docker compose run --rm keycloak-config mark-done`, which records that
