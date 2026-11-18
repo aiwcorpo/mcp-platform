@@ -563,6 +563,8 @@ services:
     <<: *java
     image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.1.0@sha256:e9e0ba9dfb1706443eeac84a4f059ef98f694a0af2d4c3491bb7416f08058e96}
     mem_limit: ${BROKER_MEM_LIMIT:-1g}
+    # Like the gateway: broker-redis and broker-postgres must not be retried under the host's search domains on egress.
+    dns_search: ["."]
     environment:
       <<: *java-env
       SPRING_CONFIG_IMPORT: optional:configtree:/secrets/broker/env/

@@ -5,8 +5,9 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
 
 ## Unreleased
 
-- The gateway container has no DNS search domains (`dns_search: ["."]`), so its glibc resolver no longer retries the store names `postgres`
-  and `redis` under the host's search domains when Docker cannot answer them. After the upgrade, `/etc/resolv.conf` in the gateway shows no `search` line.
+- The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
+  names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
+  upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
 
 ## 2.1.0 - 2026-11-17
 
