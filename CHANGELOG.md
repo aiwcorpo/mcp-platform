@@ -3,6 +3,12 @@
 The bundle follows SemVer; its version is the tag of this repository, and the image versions it defaults to are in
 `compose.yaml` (`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`). Newest first.
 
+## Unreleased
+
+- The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
+  names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
+  upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
+
 ## 2.1.0 - 2026-11-17
 
 - The aiwcorpo images are pinned by digest like the third-party ones: the defaults are `<tag>@<digest>` (gateway 2.0.1, broker 2.1.0,
