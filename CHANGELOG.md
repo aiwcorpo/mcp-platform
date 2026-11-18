@@ -8,6 +8,9 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
 - The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
   names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
   upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
+- `keycloak-config` sets the Minimum ACR value `mfa` on the client `security-admin-console` of the realm `mcp`, so the realm's administration
+  console asks for the OTP at every login instead of reusing an SSO session. `keycloak-config` runs once, so an existing installation sets
+  it by hand: realm `mcp`, Clients, `security-admin-console`, Advanced, Minimum ACR value `mfa`.
 
 ## 2.1.0 - 2026-11-17
 
