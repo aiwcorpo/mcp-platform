@@ -363,7 +363,7 @@ services:
   # keys) and the checks of its configuration, including a request for the keys of the identity provider.
   gateway-init:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1@sha256:e3e92ae32c0ab7df59f1b027c4cdd795fa2ff9baa05b9d806c844b178dab8ab6}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.1.0@sha256:f7c86baeeb95018cc0de42556bc97c2bd3d3fc6b14cf21df6c54788cde29faea}
     command: ["init", "/secrets"]
     restart: "no"
     tmpfs: ["/tmp"]
@@ -482,7 +482,7 @@ services:
 
   gateway:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1@sha256:e3e92ae32c0ab7df59f1b027c4cdd795fa2ff9baa05b9d806c844b178dab8ab6}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.1.0@sha256:f7c86baeeb95018cc0de42556bc97c2bd3d3fc6b14cf21df6c54788cde29faea}
     mem_limit: ${GATEWAY_MEM_LIMIT:-2g}
     environment: *gateway-env
     # No search domains of the host: while a store container is down, the glibc resolver would retry postgres and redis under
@@ -566,7 +566,7 @@ services:
 
   mcp-credential-broker:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.1.0@sha256:e9e0ba9dfb1706443eeac84a4f059ef98f694a0af2d4c3491bb7416f08058e96}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.2.0@sha256:10eba985d96bc20117abc655a8aed36a21824abf91a8048ade948a63f4e7ebb0}
     mem_limit: ${BROKER_MEM_LIMIT:-1g}
     # Like the gateway: broker-redis and broker-postgres must not be retried under the host's search domains on egress.
     dns_search: ["."]
@@ -631,7 +631,7 @@ services:
   # The single-container "portal" image: the BFF with the single-page application inside.
   portal:
     <<: *java
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.1.0@sha256:0894b775f6d50214403011ad09f5da35dd3da7b1dd7ba92c53a7290440c42e34}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.2.0@sha256:5f915e71cef2dda4aa61db67d1079eec958db709ad45ec1546a70f0254f47644}
     mem_limit: ${PORTAL_MEM_LIMIT:-1g}
     environment:
       <<: *java-env

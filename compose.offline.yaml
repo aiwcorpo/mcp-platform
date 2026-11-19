@@ -9,7 +9,7 @@ x-offline-postgres: &postgres ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/pos
 x-offline-redis: &redis ${MCP_THIRD_PARTY_REGISTRY:-docker.io/library}/redis:8.8.4-alpine
 x-offline-keycloak: &keycloak ${MCP_THIRD_PARTY_REGISTRY:-quay.io/keycloak}/keycloak:26.8.1
 x-offline-openbao: &openbao ${MCP_THIRD_PARTY_REGISTRY:-docker.io/openbao}/openbao:2.7.2
-x-offline-gateway: &gateway ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.0.1}
+x-offline-gateway: &gateway ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-gateway:${MCP_GATEWAY_VERSION:-2.1.0}
 
 services:
   init:
@@ -58,8 +58,8 @@ services:
     image: *gateway
     pull_policy: never
   mcp-credential-broker:
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.1.0}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-credential-broker:${MCP_BROKER_VERSION:-2.2.0}
     pull_policy: never
   portal:
-    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.1.0}
+    image: ${MCP_REGISTRY:-ghcr.io/aiwcorpo}/mcp-portal:${MCP_PORTAL_VERSION:-2.2.0}
     pull_policy: never

@@ -3,8 +3,12 @@
 The bundle follows SemVer; its version is the tag of this repository, and the image versions it defaults to are in
 `compose.yaml` (`MCP_GATEWAY_VERSION`, `MCP_BROKER_VERSION`, `MCP_PORTAL_VERSION`). Newest first.
 
-## Unreleased
+## 2.2.0 - 2026-11-19
 
+Hardening release: container log rotation, empty DNS search lists for the gateway and broker, a fresh OTP for the realm's administration console.
+Defaults move to gateway 2.1.0, broker 2.2.0, portal 2.2.0 and the GitLab server 2.0.1, which carry the 2026-11-13 audit fixes.
+
+- Defaults moved to gateway 2.1.0, broker 2.2.0, portal 2.2.0 and, in `servers.example.yaml`, the GitLab server 2.0.1, each pinned by tag and digest.
 - The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
   names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
   upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
