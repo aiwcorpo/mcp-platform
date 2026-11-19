@@ -9,6 +9,25 @@ Hardening release: container log rotation, empty DNS search lists for the gatewa
 Defaults move to gateway 2.1.0, broker 2.2.0, portal 2.2.0 and the GitLab server 2.0.1, which carry the 2026-11-13 audit fixes.
 
 - Defaults moved to gateway 2.1.0, broker 2.2.0, portal 2.2.0 and, in `servers.example.yaml`, the GitLab server 2.0.1, each pinned by tag and digest.
+- Breaking: the portal image runs as uid and gid 10001 (it ran as 100:101 in 2.1.0), and outside the `dev` profile it refuses to start when its
+  keystore is readable by all users. `init/init.sh` now writes the portal's client certificate directory (`pki/certs/mcp-portal-bff`) and the
+  files under `portal/env` as 10001:10001 (keystore and key 0400, passwords 0400), and it chowns them at every run, so a bundle installation needs no
+  manual `chown`: `docker compose pull && docker compose up -d` runs `init` before the new portal starts. `./portal/iga-catalog.yaml` is
+  mounted from the host and must stay readable by others (0644, as in the repository). Only a deployment that mounts its own files into
+  the portal needs to act, in its deploy directory before pulling the image:
+
+    ```bash
+    sudo chown 10001:10001 certs/keystore.p12 certs/truststore.p12
+    sudo chmod 0640 certs/keystore.p12
+    ```
+
+  and every other mounted file (a JVM trust store, the public TLS certificate and key) must be readable by uid 10001.
+- Gateway 2.1.0: a tool of risk `UPDATE` needs the code of the authenticator app on every call, as a `DESTRUCTIVE` one did, so users of such tools
+  must have registered an authenticator in the portal. One user may hold 20 open streams per gateway instance (`MCP_MAX_OPEN_STREAMS_PER_USER`);
+  a shared service account behind several clients can reach it and then gets `429`. Migration `V16` runs at the first start. After the first
+  start, check the tools whose manifest names an `additionalGroup`: an approval before 2.1.0 could drop the group requirement.
+- Credential broker 2.2.0: a user may write a secret (`PUT /v1/connections/{system}/secret`) 10 times a minute; more gets `429 rate_limited`
+  with `Retry-After`.
 - The gateway and the credential broker have no DNS search domains (`dns_search: ["."]`), so the glibc resolver no longer retries their store
   names (`postgres`, `redis`, `broker-postgres`, `broker-redis`) under the host's search domains when Docker cannot answer them. After the
   upgrade, `/etc/resolv.conf` in both containers shows no `search` line.
