@@ -238,7 +238,7 @@ bootstrap() {
   # Names are the contract between the components: every client verifies the broker and the gateway by these names (compose.yaml sets the matching network aliases).
   issue_cert mcp-gateway both "DNS:mcp-gateway.internal,DNS:mcp-gateway" 999:999 "$gw/mcp-gateway" gateway
   issue_cert mcp-credential-broker serverAuth "DNS:mcp-credential-broker.internal,DNS:mcp-credential-broker" 100:101 "$gw/mcp-credential-broker" mcp-credential-broker
-  issue_cert mcp-portal-bff clientAuth "" 100:101 "$gw/mcp-portal-bff" portal
+  issue_cert mcp-portal-bff clientAuth "" 10001:10001 "$gw/mcp-portal-bff" portal
   issue_cert keycloak serverAuth "DNS:keycloak.internal,DNS:keycloak,DNS:localhost,IP:127.0.0.1" 1000:0 "$gw/keycloak" keycloak
   issue_cert openbao serverAuth "DNS:openbao.internal,DNS:openbao,DNS:localhost,IP:127.0.0.1" 100:1000 "$gw/openbao" openbao
 
@@ -259,11 +259,13 @@ bootstrap() {
   chown 999:10001 "$S/gw/gateway/env"; chmod 755 "$S/gw/gateway/env"
   value kc-client-mcp-gateway | put "$S/gw/gateway/env/MCP_OIDC_CLIENT_SECRET" 999:10001 400
 
+  # The portal image runs as uid and gid 10001 since 2.2.0 (2.1.0 ran as 100:101). `put` and `issue_cert` chown on every start, so an
+  # existing installation is handed over by the next `docker compose up`.
   dir "$S/portal" 0:0
-  mk "$S/portal/env"; chown 100:101 "$S/portal/env"; chmod 755 "$S/portal/env"
-  value kc-client-mcp-portal-bff | put "$S/portal/env/PORTAL_OIDC_CLIENT_SECRET" 100:101 400
-  put "$S/portal/env/PORTAL_TLS_KEYSTORE_PASSWORD" 100:101 400 < "$PKI/store-password"
-  put "$S/portal/env/PORTAL_TLS_TRUSTSTORE_PASSWORD" 100:101 400 < "$PKI/store-password"
+  mk "$S/portal/env"; chown 10001:10001 "$S/portal/env"; chmod 755 "$S/portal/env"
+  value kc-client-mcp-portal-bff | put "$S/portal/env/PORTAL_OIDC_CLIENT_SECRET" 10001:10001 400
+  put "$S/portal/env/PORTAL_TLS_KEYSTORE_PASSWORD" 10001:10001 400 < "$PKI/store-password"
+  put "$S/portal/env/PORTAL_TLS_TRUSTSTORE_PASSWORD" 10001:10001 400 < "$PKI/store-password"
 
   dir "$S/broker" 0:0
   mk "$S/broker/env"; chown 100:101 "$S/broker/env"; chmod 755 "$S/broker/env"
