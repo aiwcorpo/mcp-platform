@@ -19,9 +19,11 @@ Defaults move to gateway 2.1.0, broker 2.2.0, portal 2.2.0 and the GitLab server
     ```bash
     sudo chown 10001:10001 certs/keystore.p12 certs/truststore.p12
     sudo chmod 0640 certs/keystore.p12
+    chmod 0600 portal.env
     ```
 
-  and every other mounted file (a JVM trust store, the public TLS certificate and key) must be readable by uid 10001.
+  The `certs` directory must stay searchable by uid 10001 and every other mounted file (`iga-catalog.yaml`, a JVM trust store, the public TLS
+  certificate and key) readable by it.
 - Gateway 2.1.0: a tool of risk `UPDATE` needs the code of the authenticator app on every call, as a `DESTRUCTIVE` one did, so users of such tools
   must have registered an authenticator in the portal. One user may hold 20 open streams per gateway instance (`MCP_MAX_OPEN_STREAMS_PER_USER`);
   a shared service account behind several clients can reach it and then gets `429`. Migration `V16` runs at the first start. After the first
