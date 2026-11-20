@@ -64,8 +64,10 @@ spec:
           readinessProbe:
             httpGet: {path: /actuator/health, port: internal, scheme: HTTPS}
             {{- toYaml $gw.probes.readiness | nindent 12 }}
+          # TCP, not the health endpoint: that one includes the DataSource, and a database outage must not restart every
+          # instance. The gateway permits only exactly /actuator/health, so /actuator/health/liveness is not available.
           livenessProbe:
-            httpGet: {path: /actuator/health, port: internal, scheme: HTTPS}
+            tcpSocket: {port: internal}
             {{- toYaml $gw.probes.liveness | nindent 12 }}
           resources:
             {{- toYaml $gw.resources | nindent 12 }}
@@ -158,7 +160,9 @@ spec:
       policies:
         - {type: Pods, value: 1, periodSeconds: 120}
 {{- end }}
-{{- if $gw.podDisruptionBudget.enabled }}
+{{- $minimum := ternary $gw.autoscaling.minReplicas $gw.replicaCount $gw.autoscaling.enabled -}}
+{{- /* One replica with minAvailable 1 allows no disruption at all, and a node drain would hang. */ -}}
+{{- if and $gw.podDisruptionBudget.enabled (gt (int $minimum) 1) }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

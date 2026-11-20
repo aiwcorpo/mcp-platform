@@ -79,9 +79,11 @@ capabilities:
      Call with (dict "derived" <dict> "env" <dict> "extra" <list>). Values are always quoted: environment values are strings. */}}
 {{- define "mcp-platform.env" -}}
 {{- $merged := merge (dict) .env .derived -}}
+{{- $overridden := list -}}
+{{- range .extra }}{{- $overridden = append $overridden .name -}}{{- end }}
 {{- range $name := keys $merged | sortAlpha }}
 {{- $value := get $merged $name }}
-{{- if ne (toString $value) "" }}
+{{- if and (ne (toString $value) "") (not (has $name $overridden)) }}
 - name: {{ $name }}
   value: {{ toString $value | quote }}
 {{- end }}

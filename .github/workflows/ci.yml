@@ -18,3 +18,4 @@ jobs:
       - run: scripts/verify.sh
         env:
           REQUIRE_SHELLCHECK: '1'
+          REQUIRE_HELM: '1'

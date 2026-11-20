@@ -100,6 +100,20 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
+# Ingress policies that give the cluster the isolation of the Compose networks: the HTTP ports of the portal (8080) and the gateway
+# (8080) accept only the nginx pods, the gateway's 8443 accepts the broker and the portal, the broker's 8443 accepts the gateway and
+# the portal. nginx stays open: it is the entry point. Needs a CNI that enforces NetworkPolicy. Setting portal.trustedProxies to
+# the pod network (as the README example does) is safe only while these policies are on: without them any pod can reach 8080 and
+# send forged X-Forwarded-* headers, skipping everything nginx enforces (cookie stripping, CSP, the /admin/v1/ block, login rate limit).
+# Kubelet probes come from the node, which common CNIs allow; if yours does not, allow the node addresses in extraIngress.
+networkPolicy:
+  enabled: true
+  # Extra ingress rules (complete NetworkPolicyIngressRule objects), appended to the policy of the component. Typical use:
+  # gateway - the MCP servers that call the gateway and the Prometheus that scrapes 8443/actuator/prometheus.
+  gateway: {extraIngress: []}
+  broker: {extraIngress: []}
+  portal: {extraIngress: []}
+
 nginx:
   # Compose: nginx:1.27-alpine pinned by digest.
   image:
@@ -155,6 +169,7 @@ gateway:
     targetMemoryUtilizationPercentage: ""
     # Open event streams end when an instance goes away, so scale down slowly.
     scaleDownStabilizationSeconds: 600
+  # Rendered only when the gateway runs at least 2 instances (autoscaling.minReplicas, or replicaCount without autoscaling).
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
@@ -197,8 +212,9 @@ gateway:
     # Compose: mem_limit 2g (GATEWAY_MEM_LIMIT); the JVM takes 60 percent of the limit.
     requests: {cpu: 250m, memory: 1Gi}
     limits: {memory: 2Gi}
-  # Port 8080 serves clients through nginx; 8443 is the mTLS listener of the broker and the portal. The probes ask the
-  # health endpoint on 8443 (https, no client certificate needed).
+  # Port 8080 serves clients through nginx; 8443 is the mTLS listener of the broker and the portal. Startup and readiness ask
+  # the health endpoint on 8443 (https, no client certificate needed). Liveness is a TCP check: the health endpoint includes
+  # PostgreSQL, and an outage of it would otherwise restart all instances at once and keep them restarting.
   probes:
     startup: {periodSeconds: 5, failureThreshold: 60}
     readiness: {periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
@@ -264,6 +280,7 @@ portal:
   # Regular expression of the addresses X-Forwarded-* is believed from, dots in brackets: the pod network of the nginx pods
   # (for example 10[.]244[.].*). Compose resolves the name `nginx` instead (PORTAL_TRUSTED_PROXY_HOST), which in a cluster
   # would give the Service address, not the address nginx connects from. Required. Passed as PORTAL_TRUSTED_PROXIES.
+  # The pod network is safe only with networkPolicy.enabled: otherwise any pod can reach 8080 and forge X-Forwarded-*.
   trustedProxies: ""
   # Secret with files read by configtree at /secrets/portal/env. Required keys: PORTAL_OIDC_CLIENT_SECRET (client mcp-portal-bff),
   # PORTAL_TLS_KEYSTORE_PASSWORD, PORTAL_TLS_TRUSTSTORE_PASSWORD.

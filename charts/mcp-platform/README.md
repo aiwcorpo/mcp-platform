@@ -55,6 +55,9 @@ Names below are the values of `values.yaml`; each is documented there, together 
     The gateway's generated values (internal JWT keys, cursor keys, database and Redis passwords) come from its own `init` command,
     which writes them into a directory and stops with `FAIL` on the checks it cannot pass yet; the files are kept:
 
+    The commands below ran on macOS with Docker Desktop. On a Linux host they are untested: `init` writes its files as the image's user
+    (uid 999) with mode 0600 or 0640, so the `chown` line is there for that case.
+
     ```bash
     docker run --rm --platform linux/amd64 -v "$PWD/gw:/secrets" \
       -e MCP_PUBLIC_URL=https://mcp.corp.test -e MCP_OIDC_ISSUER=https://mcp.corp.test/auth/realms/mcp \
@@ -62,12 +65,12 @@ Names below are the values of `values.yaml`; each is documented there, together 
       -e MCP_BROKER_URL=https://mcp-credential-broker:8443 -e MCP_BROKER_TLS_NAME=mcp-credential-broker \
       -e MCP_REDIS_WAIT_REPLICAS=1 -e MCP_REDIS_HOST=redis -e MCP_DB_URL=jdbc:postgresql://postgres:5432/gateway \
       -e MCP_TLS_KEYSTORE=/none -e MCP_TLS_TRUSTSTORE=/none \
-      ghcr.io/aiwcorpo/mcp-gateway:2.1.0 init /secrets
+      ghcr.io/aiwcorpo/mcp-gateway:2.1.0@sha256:f7c86baeeb95018cc0de42556bc97c2bd3d3fc6b14cf21df6c54788cde29faea init /secrets
+    sudo chown -R "$(id -u):$(id -g)" gw
     kubectl -n mcp create secret generic mcp-gateway-env \
       --from-file=gw/gateway/env/MCP_ACTIVITY_CURSOR_KEY --from-file=gw/gateway/env/MCP_LIST_CURSOR_KEY \
       --from-file=gw/gateway/env/MCP_INTERNAL_JWT_ACTIVE_KID --from-file=internal-jwt.jwks=gw/gateway/internal-jwt.jwks \
-      --from-literal=MCP_DB_PASSWORD='<password of the gateway database user>' \
-      --from-literal=MCP_REDIS_PASSWORD='<password of the gateway Redis user>' \
+      --from-file=gw/gateway/env/MCP_DB_PASSWORD --from-file=gw/gateway/env/MCP_REDIS_PASSWORD \
       --from-literal=MCP_TLS_STORE_PASSWORD='<password of the keystores>' \
       --from-literal=MCP_OIDC_CLIENT_SECRET='<secret of the client mcp-gateway>'
     kubectl -n mcp create secret generic mcp-broker-env \
@@ -78,7 +81,9 @@ Names below are the values of `values.yaml`; each is documented there, together 
       --from-literal=PORTAL_TLS_KEYSTORE_PASSWORD='<...>' --from-literal=PORTAL_TLS_TRUSTSTORE_PASSWORD='<...>'
     ```
 
-    The gateway's own Redis password and users come from the same run (`gw/redis/users.acl`) when you also use it for your Redis.
+    The database and Redis passwords are the ones `init` generated (the files `MCP_DB_PASSWORD` and `MCP_REDIS_PASSWORD`), and
+`gw/redis/users.acl` carries the Redis side of the latter; create the database user and the Redis user with the same values.
+The image reference is the one in `values.yaml`.
     Do not put `MCP_INTERNAL_JWT_KEYS_FILE` in the Secret: the chart sets it to the mounted `internal-jwt.jwks`.
 
 ## Install
@@ -115,11 +120,21 @@ gateway's TLS name). One release per namespace with the defaults; `gateway.servi
 TLS names in `env`. The pods set `enableServiceLinks: false`: with a Service called `mcp-gateway` the kubelet would otherwise inject
 `MCP_GATEWAY_PORT=tcp://...`, which is a setting of the gateway.
 
+## Network policies
+
+`networkPolicy.enabled` (default on) renders one NetworkPolicy per component. The portal's 8080 and the gateway's 8080 accept only the
+nginx pods; the gateway's 8443 accepts the broker and the portal; the broker's 8443 accepts the gateway and the portal. nginx accepts
+traffic from anywhere. This is the isolation Compose gets from its networks, and `portal.trustedProxies` set to the pod network (as in
+the example above) is safe only with it: without the policies any pod could call `<release>-portal:8080` or `mcp-gateway:8080`
+directly with forged `X-Forwarded-*` headers and skip what nginx enforces (cookie stripping, the CSP, the `/admin/v1/` block, the
+login rate limit). It needs a CNI that enforces NetworkPolicy. Add callers (MCP servers on the gateway's 8080, a Prometheus on its
+8443) with `networkPolicy.<component>.extraIngress`.
+
 ## Health checks
 
 | Component | Probe |
 | --- | --- |
-| gateway | HTTPS `GET /actuator/health` on 8443 (the connector asks for a client certificate and does not require one) |
+| gateway | startup and readiness: HTTPS `GET /actuator/health` on 8443 (the connector asks for a client certificate and does not require one); liveness: TCP on 8443, because the health endpoint includes PostgreSQL and a database outage must not restart every instance |
 | portal | HTTP `GET /actuator/health` on 8080 |
 | nginx | HTTP `GET /__proxy/health` on its http port |
 | broker | TCP on 8443 (the listener demands a client certificate) |

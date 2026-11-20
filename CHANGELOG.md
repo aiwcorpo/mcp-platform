@@ -8,7 +8,7 @@ The bundle follows SemVer; its version is the tag of this repository, and the im
 - New, unreleased: the Helm chart `charts/mcp-platform` (version 0.1.0) runs the gateway with a HorizontalPodAutoscaler, the credential
   broker, the portal and nginx on Kubernetes, with PostgreSQL, Redis, Keycloak and OpenBao supplied by the operator and every secret
   referenced by name. It carries the image versions of `compose.yaml`; `scripts/check-chart.sh`, part of `scripts/verify.sh`, fails when
-  they or the copies of `nginx/` and `portal/iga-catalog.yaml` drift. Tested on a single-node kind cluster, not on OpenShift.
+  they or the copies of `nginx/` and `portal/iga-catalog.yaml` drift. Tested on a single-node kind cluster, not on OpenShift. NetworkPolicies (default on) let only the nginx pods reach the HTTP ports of the portal and the gateway.
 
 ## 2.2.0 - 2026-11-19
 
