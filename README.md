@@ -463,6 +463,12 @@ Nothing, normally: the services restart by themselves and `openbao-unseal` unsea
 `down` and `up`, finish with `docker compose up -d`: `restart` restarts the one-shot `gateway-init` at the same time as Keycloak, so it
 can report a failure although the platform is fine, and `up -d` runs it again in order. Data survive `down`; `down -v` deletes all of it.
 
+## On Kubernetes
+
+`charts/mcp-platform` is a Helm chart for the gateway (with a HorizontalPodAutoscaler), the broker, the portal and nginx, with PostgreSQL,
+Redis, Keycloak and OpenBao that you supply. It is new and unreleased (version 0.1.0); the images are the ones `compose.yaml` pins.
+Tested on a single-node kind cluster only, not on OpenShift. See [charts/mcp-platform/README.md](charts/mcp-platform/README.md).
+
 ## Known limits
 
 - The gateway and the broker each have their own Redis, as asked. The broker publishes `credential.invalidated` on its Redis and the

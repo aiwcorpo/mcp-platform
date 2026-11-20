@@ -1,0 +1,323 @@
+# MCP Platform on Kubernetes: nginx, gateway, credential broker and portal.
+# PostgreSQL (two databases), Redis (two instances), Keycloak and OpenBao are not part of this chart; point it at yours.
+# Every secret is referenced by name and must exist before the install: see the "Secrets" comments and the install page of the docs.
+#
+# Each environment variable that compose.yaml passes to these services is either derived from a value here (stated in the
+# comment) or listed in the component's `env` map with the compose default. `extraEnv` adds or overrides anything else.
+# Compose settings of services that are external here are not mirrored: KC_* and the Keycloak realm import (Keycloak), POSTGRES_*
+# (databases), BAO_* and the OpenBao provisioning (OpenBao), the init service (certificates and secrets, see the install page),
+# MCP_EDGE_PREFIX, the *_MEM_LIMIT variables (use `resources`) and MCP_BIND (use the nginx Service).
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  # Compose: MCP_REGISTRY. The images of the platform are public on ghcr.io.
+  imageRegistry: ghcr.io
+  imagePullSecrets: []
+  # Compose: MCP_PUBLIC_ORIGIN. The one address users and AI clients use, https and without a trailing slash. Required.
+  # Derives MCP_PUBLIC_URL (gateway), MCP_OIDC_ISSUER, MCP_OIDC_AUTHORIZATION_SERVER, MCP_PORTAL_URL (broker),
+  # PORTAL_PUBLIC_BASE_URL, PORTAL_OIDC_ISSUER_URI, PORTAL_OIDC_AUTHORIZATION_URI and MCP_PUBLIC_ORIGIN (nginx).
+  publicOrigin: ""
+  # Compose: MCP_DOMAIN. The host name of publicOrigin without a port; nginx answers TLS for this name only. Required.
+  publicDomain: ""
+
+# Keycloak, supplied by the operator, with the realm of keycloak/realm-mcp.json imported (the realm is "mcp" and the
+# platform reaches Keycloak under the relative path /auth, as in compose.yaml).
+keycloak:
+  realm: mcp
+  # DNS name that nginx proxies /auth/ to over plain http (compose: keycloak:8080). Needs the http listener
+  # (KC_HTTP_ENABLED=true, KC_PROXY_HEADERS=xforwarded, KC_HOSTNAME=<publicOrigin>/auth, KC_HTTP_RELATIVE_PATH=/auth). Required.
+  # The chart creates an ExternalName Service for it; nginx resolves the name when it starts, so restart nginx after the
+  # address behind the name changes.
+  host: ""
+  httpPort: 8080
+  # Address of Keycloak's https listener as the gateway, broker and portal call it, for example https://keycloak.corp.test:8443.
+  # Its certificate must be trusted by the JVM trust store (tls.trustSecretName, jvm-truststore.p12). Required.
+  # Derives MCP_OIDC_JWKS_URI and MCP_OIDC_TOKEN_URI (gateway), MCP_OIDC_JWKS_URI and BROKER_BFFTOKEN_TOKENURL (broker),
+  # PORTAL_OIDC_TOKEN_URI, PORTAL_OIDC_JWK_SET_URI, PORTAL_OIDC_USER_INFO_URI and PORTAL_OIDC_END_SESSION_URI (portal).
+  internalBaseUrl: ""
+
+# PostgreSQL: one database per component, JDBC URLs. Passwords come from the component's secret (MCP_DB_PASSWORD).
+postgresql:
+  gateway:
+    # Compose: MCP_DB_URL (jdbc:postgresql://postgres:5432/gateway). Required.
+    url: ""
+    # MCP_DB_USER, default of the gateway: gateway.
+    user: gateway
+  broker:
+    # Compose: MCP_DB_URL (jdbc:postgresql://broker-postgres:5432/broker). Required.
+    url: ""
+    # Compose: MCP_DB_USER.
+    user: broker
+
+# Redis: one instance per component. Passwords come from the component's secret (MCP_REDIS_PASSWORD).
+redis:
+  gateway:
+    # Compose: MCP_REDIS_HOST. Required. The gateway checks at start that the primary has a replica that confirms writes
+    # (gateway.env.MCP_REDIS_WAIT_REPLICAS), so a burned confirmation code survives the loss of the primary.
+    host: ""
+    port: 6379
+    # MCP_REDIS_USER, default of the gateway: gateway.
+    user: gateway
+  broker:
+    # Compose: MCP_REDIS_HOST. Required.
+    host: ""
+    port: 6379
+    # MCP_REDIS_USER, default of the broker: broker.
+    user: broker
+
+openbao:
+  # Compose: MCP_BAO_ADDR (https://openbao.internal:8200). Required. The CA of its certificate must be in the broker's
+  # trust stores (broker-outbound-truststore.p12 and jvm-truststore.p12). The AppRole comes from the broker's secret.
+  addr: ""
+
+tls:
+  # Secret with the trust stores of the internal CA, mounted read-only at /certs/trust in the gateway, the broker and the
+  # portal. Keys: truststore.p12 (all three), jvm-truststore.p12 (JAVA_TOOL_OPTIONS of all three) and
+  # broker-outbound-truststore.p12 (broker). Required.
+  trustSecretName: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod security: users are those of the images (gateway 999, broker 100, portal 10001, nginx 101; group 10001 for the three Java
+# images). fsGroup 10001 makes the mounted secrets readable by that group. The `runAsUser` of a component is added to this
+# context, because the container runtime refuses a group without a user. A cluster that assigns user ids itself (OpenShift
+# restricted SCC) rejects fixed ones: it needs runAsGroup and fsGroup null here and runAsUser null in each component. That setup
+# is not tested.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+# Ingress policies that give the cluster the isolation of the Compose networks: the HTTP ports of the portal (8080) and the gateway
+# (8080) accept only the nginx pods, the gateway's 8443 accepts the broker and the portal, the broker's 8443 accepts the gateway and
+# the portal. nginx stays open: it is the entry point. Needs a CNI that enforces NetworkPolicy. Setting portal.trustedProxies to
+# the pod network (as the README example does) is safe only while these policies are on: without them any pod can reach 8080 and
+# send forged X-Forwarded-* headers, skipping everything nginx enforces (cookie stripping, CSP, the /admin/v1/ block, login rate limit).
+# Kubelet probes come from the node, which common CNIs allow; if yours does not, allow the node addresses in extraIngress.
+networkPolicy:
+  enabled: true
+  # Extra ingress rules (complete NetworkPolicyIngressRule objects), appended to the policy of the component. Typical use:
+  # gateway - the MCP servers that call the gateway and the Prometheus that scrapes 8443/actuator/prometheus.
+  gateway: {extraIngress: []}
+  broker: {extraIngress: []}
+  portal: {extraIngress: []}
+
+nginx:
+  # Compose: nginx:1.27-alpine pinned by digest.
+  image:
+    registry: docker.io
+    repository: library/nginx
+    version: 1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+  imagePullPolicy: IfNotPresent
+  replicaCount: 2
+  runAsUser: 101
+  # Secret of type kubernetes.io/tls (tls.crt, tls.key) for publicDomain, mounted at /etc/nginx/tls. Required.
+  tlsSecretName: ""
+  # The container listens on unprivileged ports; the Service publishes the usual ones. Compose: MCP_HTTPS_PORT and MCP_HTTP_PORT
+  # (the ports users see, 443 and 80). X-Forwarded-Port and the redirect use the Service port.
+  listenHttpsPort: 8443
+  listenHttpPort: 8080
+  service:
+    type: ClusterIP
+    httpsPort: 443
+    httpPort: 80
+    annotations: {}
+    # Compose: MCP_BIND has no counterpart; restrict by loadBalancerSourceRanges or a NetworkPolicy.
+    loadBalancerSourceRanges: []
+  # keycloak-admin-allow.conf: "allow all;" by default, as in compose.yaml (an OTP guards every administrator there). To narrow
+  # it, put one `allow <network>;` line per network followed by `deny all;`. Empty uses the file of the chart.
+  keycloakAdminAllow: ""
+  # nginx logs every request before any login, to stdout; the cluster's log collector decides retention.
+  # Compose: tmpfs /tmp:size=256m for the request bodies that wait until complete.
+  tmpSizeLimit: 256Mi
+  resources:
+    requests: {cpu: 100m, memory: 128Mi}
+    limits: {memory: 512Mi}
+  podAnnotations: {}
+
+gateway:
+  # Name of the Service. The default is the short name the compose certificates carry; empty prefixes the release name.
+  # One release per namespace with the defaults.
+  serviceName: mcp-gateway
+  image:
+    repository: aiwcorpo/mcp-gateway
+    # Compose: MCP_GATEWAY_VERSION.
+    version: 2.1.0@sha256:f7c86baeeb95018cc0de42556bc97c2bd3d3fc6b14cf21df6c54788cde29faea
+  imagePullPolicy: IfNotPresent
+  runAsUser: 999
+  # Used while autoscaling is off. The gateway keeps its state in PostgreSQL and Redis and every instance needs the same secret
+  # (internal JWT keys, cursor keys), so any number of instances works.
+  replicaCount: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    # Memory target; empty leaves it out.
+    targetMemoryUtilizationPercentage: ""
+    # Open event streams end when an instance goes away, so scale down slowly.
+    scaleDownStabilizationSeconds: 600
+  # Rendered only when the gateway runs at least 2 instances (autoscaling.minReplicas, or replicaCount without autoscaling).
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # Secret with files read by Spring's configtree at /secrets/gateway/env (SPRING_CONFIG_IMPORT). Required keys:
+  #   MCP_TLS_STORE_PASSWORD   password of the keystore and the trust stores
+  #   MCP_OIDC_CLIENT_SECRET   secret of the client mcp-gateway in Keycloak
+  #   MCP_DB_PASSWORD, MCP_REDIS_PASSWORD
+  #   MCP_ACTIVITY_CURSOR_KEY, MCP_LIST_CURSOR_KEY
+  #   MCP_INTERNAL_JWT_ACTIVE_KID, internal-jwt.jwks   (the internal JWT keys; MCP_INTERNAL_JWT_KEYS_FILE points at the file)
+  # `docker run --rm -v <dir>:/secrets <gateway image> init /secrets` generates the last four, the passwords and a Redis
+  # ACL under <dir>/gateway; the install page shows how to load them. Required.
+  envSecretName: ""
+  # Secret with the gateway's client certificate (PKCS12 keystore.p12, SAN mcp-gateway, usable as server and
+  # client certificate), mounted at /certs/own. Required.
+  tlsSecretName: ""
+  # PEM bundle of the CAs that sign certificates of MCP servers (trust mode "ca"). Compose: MCP_SERVER_TRUSTED_CAS_FILE.
+  # Name of a Secret with the key servers-ca.pem, mounted at /certs/servers-ca.pem and passed as MCP_SERVER_TRUSTED_CAS.
+  serverTrustedCasSecretName: ""
+  env:
+    # Compose gateway-env. Entries set to a value in `derived` by the templates (see the comments above) are not listed.
+    SPRING_CONFIG_IMPORT: optional:configtree:/secrets/gateway/env/
+    JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
+    MCP_OIDC_AUDIENCE: mcp-gateway
+    MCP_OIDC_CLIENT_ID: mcp-gateway
+    MCP_REDIS_WAIT_REPLICAS: "1"
+    # The name in the broker's certificate. The compose certificates carry both mcp-credential-broker and
+    # mcp-credential-broker.internal.
+    MCP_BROKER_TLS_NAME: mcp-credential-broker
+    # The portal's client certificate (CN mcp-portal-bff) and the token it gets by its login.
+    MCP_ADMIN_CLIENT_CNS: mcp-portal-bff
+    MCP_ADMIN_AUTHORIZED_PARTY: mcp-portal-bff
+    MCP_ADMIN_MFA_ACR_VALUES: mfa
+    MCP_TLS_KEYSTORE: /certs/own/keystore.p12
+    MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+    MCP_INTERNAL_JWT_KEYS_FILE: /secrets/gateway/env/internal-jwt.jwks
+  extraEnv: []
+  # Derived: MCP_PUBLIC_URL, MCP_OIDC_ISSUER, MCP_OIDC_JWKS_URI, MCP_OIDC_TOKEN_URI, MCP_OIDC_AUTHORIZATION_SERVER, MCP_DB_URL,
+  # MCP_DB_USER, MCP_REDIS_HOST, MCP_REDIS_PORT, MCP_REDIS_USER, MCP_BROKER_URL, MCP_SERVER_TRUSTED_CAS.
+  resources:
+    # Compose: mem_limit 2g (GATEWAY_MEM_LIMIT); the JVM takes 60 percent of the limit.
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {memory: 2Gi}
+  # Port 8080 serves clients through nginx; 8443 is the mTLS listener of the broker and the portal. Startup and readiness ask
+  # the health endpoint on 8443 (https, no client certificate needed). Liveness is a TCP check: the health endpoint includes
+  # PostgreSQL, and an outage of it would otherwise restart all instances at once and keep them restarting.
+  probes:
+    startup: {periodSeconds: 5, failureThreshold: 60}
+    readiness: {periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    liveness: {periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3}
+  terminationGracePeriodSeconds: 60
+  podAnnotations: {}
+
+broker:
+  # Name of the Service (see gateway.serviceName).
+  serviceName: mcp-credential-broker
+  image:
+    repository: aiwcorpo/mcp-credential-broker
+    # Compose: MCP_BROKER_VERSION.
+    version: 2.2.0@sha256:10eba985d96bc20117abc655a8aed36a21824abf91a8048ade948a63f4e7ebb0
+  imagePullPolicy: IfNotPresent
+  runAsUser: 100
+  # One instance, as in compose.yaml; the broker is not exercised with several here.
+  replicaCount: 1
+  # Secret with files read by configtree at /secrets/broker/env. Required keys: MCP_TLS_STORE_PASSWORD, MCP_DB_PASSWORD,
+  # MCP_REDIS_PASSWORD, MCP_BAO_ROLE_ID, MCP_BAO_SECRET_ID (the AppRole of the policy mcp-credential-broker, init/init.sh).
+  envSecretName: ""
+  # Secret with the broker's server certificate (keystore.p12, SAN mcp-credential-broker), mounted at /certs/own. Required.
+  tlsSecretName: ""
+  env:
+    SPRING_CONFIG_IMPORT: optional:configtree:/secrets/broker/env/
+    JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
+    MCP_OIDC_AUDIENCE: mcp-credential-broker
+    # Audiences an administrator may name in exchangeAudience of a token-exchange system.
+    BROKER_TOKENEXCHANGE_ALLOWEDAUDIENCES: opensearch
+    # Fresh MFA of the administrator for writes of /v1/admin/systems: the same acr as at the gateway.
+    BROKER_BFFTOKEN_MFAACRVALUES: mfa
+    # The name in the gateway's certificate. The broker refuses to start unless the host of its JWKS address equals it, so the
+    # address is built from this value and the name must resolve to the gateway Service (gateway.serviceName).
+    MCP_GATEWAY_TLS_NAME: mcp-gateway
+    MCP_TLS_KEYSTORE: /certs/own/keystore.p12
+    # Callers: the internal CA only. Connections out: also the company CA.
+    MCP_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+    MCP_TLS_OUTBOUND_TRUSTSTORE: /certs/trust/broker-outbound-truststore.p12
+  extraEnv: []
+  # Derived: MCP_OIDC_ISSUER, MCP_OIDC_JWKS_URI, BROKER_BFFTOKEN_TOKENURL, MCP_GATEWAY_JWKS_URI, MCP_BAO_ADDR, MCP_PORTAL_URL,
+  # MCP_REDIS_HOST, MCP_REDIS_PORT, MCP_REDIS_USER, MCP_DB_URL, MCP_DB_USER.
+  resources:
+    # Compose: mem_limit 1g (BROKER_MEM_LIMIT).
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  # The listener on 8443 demands a client certificate, so the probes are TCP checks, as the healthcheck in compose.yaml.
+  probes:
+    startup: {periodSeconds: 5, failureThreshold: 60}
+    readiness: {periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    liveness: {periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3}
+  terminationGracePeriodSeconds: 30
+  podAnnotations: {}
+
+portal:
+  image:
+    repository: aiwcorpo/mcp-portal
+    # Compose: MCP_PORTAL_VERSION.
+    version: 2.2.0@sha256:5f915e71cef2dda4aa61db67d1079eec958db709ad45ec1546a70f0254f47644
+  imagePullPolicy: IfNotPresent
+  runAsUser: 10001
+  # One instance: login sessions live in the BFF's memory.
+  replicaCount: 1
+  # Regular expression of the addresses X-Forwarded-* is believed from, dots in brackets: the pod network of the nginx pods
+  # (for example 10[.]244[.].*). Compose resolves the name `nginx` instead (PORTAL_TRUSTED_PROXY_HOST), which in a cluster
+  # would give the Service address, not the address nginx connects from. Required. Passed as PORTAL_TRUSTED_PROXIES.
+  # The pod network is safe only with networkPolicy.enabled: otherwise any pod can reach 8080 and forge X-Forwarded-*.
+  trustedProxies: ""
+  # Secret with files read by configtree at /secrets/portal/env. Required keys: PORTAL_OIDC_CLIENT_SECRET (client mcp-portal-bff),
+  # PORTAL_TLS_KEYSTORE_PASSWORD, PORTAL_TLS_TRUSTSTORE_PASSWORD.
+  envSecretName: ""
+  # Secret with the portal's client certificate (keystore.p12, CN mcp-portal-bff), mounted at /certs/own. The portal refuses to
+  # start when the keystore is readable by all users, so the default file mode of the mount is 0440. Required.
+  tlsSecretName: ""
+  # Entitlement catalog (portal/iga-catalog.yaml, mounted at /config/iga-catalog.yaml). Empty uses the file of the chart, a
+  # copy of the one in the repository; name an existing ConfigMap with the key iga-catalog.yaml to use your own.
+  igaCatalogConfigMapName: ""
+  env:
+    SPRING_CONFIG_IMPORT: optional:configtree:/secrets/portal/env/
+    JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/certs/trust/jvm-truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12 -Djavax.net.ssl.trustStorePassword=changeit
+    PORTAL_PORT: "8080"
+    PORTAL_OIDC_CLIENT_ID: mcp-portal-bff
+    PORTAL_BROKER_TLS_NAME: mcp-credential-broker
+    PORTAL_GATEWAY_ADMIN_TLS_NAME: mcp-gateway
+    PORTAL_TLS_KEYSTORE: /certs/own/keystore.p12
+    PORTAL_TLS_TRUSTSTORE: /certs/trust/truststore.p12
+    # The level the realm reports in acr after password and OTP.
+    PORTAL_STEP_UP_ACR_VALUES: mfa
+    PORTAL_IGA_ADAPTER: keycloak-groups
+    PORTAL_IGA_CATALOG_FILE: /config/iga-catalog.yaml
+    PORTAL_CLIENT_CONFIGS_CLAUDE_CODE_CLIENT_ID: claude-code
+    # Compose: MCP_CLAUDE_CODE_CALLBACK_PORT (33418); also a variable of the realm import.
+    PORTAL_CLIENT_CONFIGS_CLAUDE_CODE_CALLBACK_PORT: "33418"
+  extraEnv: []
+  # Derived: PORTAL_PUBLIC_BASE_URL, PORTAL_OIDC_ISSUER_URI, PORTAL_OIDC_AUTHORIZATION_URI, PORTAL_OIDC_TOKEN_URI,
+  # PORTAL_OIDC_JWK_SET_URI, PORTAL_OIDC_USER_INFO_URI, PORTAL_OIDC_END_SESSION_URI, PORTAL_BROKER_URL, PORTAL_GATEWAY_ADMIN_URL,
+  # PORTAL_TRUSTED_PROXIES.
+  resources:
+    # Compose: mem_limit 1g (PORTAL_MEM_LIMIT).
+    requests: {cpu: 100m, memory: 512Mi}
+    limits: {memory: 1Gi}
+  probes:
+    startup: {periodSeconds: 5, failureThreshold: 60}
+    readiness: {periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    liveness: {periodSeconds: 20, timeoutSeconds: 3, failureThreshold: 3}
+  terminationGracePeriodSeconds: 30
+  podAnnotations: {}

@@ -1,0 +1,179 @@
+{{- $gw := .Values.gateway -}}
+{{- $sel := dict "root" . "component" "gateway" -}}
+{{- $derived := dict
+  "MCP_PUBLIC_URL" (include "mcp-platform.origin" .)
+  "MCP_OIDC_ISSUER" (include "mcp-platform.issuer" .)
+  "MCP_OIDC_AUTHORIZATION_SERVER" (include "mcp-platform.issuer" .)
+  "MCP_OIDC_JWKS_URI" (printf "%s/certs" (include "mcp-platform.kcInternal" .))
+  "MCP_OIDC_TOKEN_URI" (printf "%s/token" (include "mcp-platform.kcInternal" .))
+  "MCP_DB_URL" (required "postgresql.gateway.url is required" .Values.postgresql.gateway.url)
+  "MCP_DB_USER" .Values.postgresql.gateway.user
+  "MCP_REDIS_HOST" (required "redis.gateway.host is required" .Values.redis.gateway.host)
+  "MCP_REDIS_PORT" (.Values.redis.gateway.port | toString)
+  "MCP_REDIS_USER" .Values.redis.gateway.user
+  "MCP_BROKER_URL" (printf "https://%s:8443" (include "mcp-platform.broker" .))
+  "MCP_SERVER_TRUSTED_CAS" (ternary "/certs/servers-ca.pem" "" (ne $gw.serverTrustedCasSecretName ""))
+-}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-platform.gateway" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not $gw.autoscaling.enabled }}
+  replicas: {{ $gw.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-platform.selectorLabels" $sel | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with (merge (dict) $gw.podAnnotations .Values.podAnnotations) }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mcp-platform.fullname" . }}
+      # A Service named mcp-gateway makes the kubelet inject MCP_GATEWAY_PORT=tcp://..., which is a setting of the gateway.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- include "mcp-platform.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "mcp-platform.podSecurityContext" (dict "root" . "runAsUser" $gw.runAsUser) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $gw.terminationGracePeriodSeconds }}
+      containers:
+        - name: gateway
+          image: {{ include "mcp-platform.image" (dict "root" . "image" $gw.image) | quote }}
+          imagePullPolicy: {{ $gw.imagePullPolicy }}
+          securityContext:
+            {{- include "mcp-platform.containerSecurityContext" . | nindent 12 }}
+            runAsUser: {{ $gw.runAsUser }}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: internal, containerPort: 8443}
+          env:
+            {{- include "mcp-platform.env" (dict "derived" $derived "env" $gw.env "extra" $gw.extraEnv) | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /actuator/health, port: internal, scheme: HTTPS}
+            {{- toYaml $gw.probes.startup | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: internal, scheme: HTTPS}
+            {{- toYaml $gw.probes.readiness | nindent 12 }}
+          # TCP, not the health endpoint: that one includes the DataSource, and a database outage must not restart every
+          # instance. The gateway permits only exactly /actuator/health, so /actuator/health/liveness is not available.
+          livenessProbe:
+            tcpSocket: {port: internal}
+            {{- toYaml $gw.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $gw.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: own, mountPath: /certs/own, readOnly: true}
+            - {name: trust, mountPath: /certs/trust, readOnly: true}
+            - {name: env, mountPath: /secrets/gateway/env, readOnly: true}
+            {{- if $gw.serverTrustedCasSecretName }}
+            - {name: servers-ca, mountPath: /certs/servers-ca.pem, subPath: servers-ca.pem, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: own
+          secret: {secretName: {{ required "gateway.tlsSecretName is required" $gw.tlsSecretName | quote }}, defaultMode: 0440}
+        - name: trust
+          secret: {secretName: {{ required "tls.trustSecretName is required" .Values.tls.trustSecretName | quote }}, defaultMode: 0444}
+        - name: env
+          secret: {secretName: {{ required "gateway.envSecretName is required" $gw.envSecretName | quote }}, defaultMode: 0440}
+        {{- if $gw.serverTrustedCasSecretName }}
+        - name: servers-ca
+          secret: {secretName: {{ $gw.serverTrustedCasSecretName | quote }}, defaultMode: 0444}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- if .Values.affinity }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "mcp-platform.selectorLabels" $sel | nindent 20 }}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-platform.gateway" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  selector:
+    {{- include "mcp-platform.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+    - {name: internal, port: 8443, targetPort: internal}
+{{- if $gw.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "mcp-platform.gateway" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "mcp-platform.gateway" . }}
+  minReplicas: {{ $gw.autoscaling.minReplicas }}
+  maxReplicas: {{ $gw.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: {type: Utilization, averageUtilization: {{ $gw.autoscaling.targetCPUUtilizationPercentage }}}
+    {{- if $gw.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target: {type: Utilization, averageUtilization: {{ $gw.autoscaling.targetMemoryUtilizationPercentage }}}
+    {{- end }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ $gw.autoscaling.scaleDownStabilizationSeconds }}
+      policies:
+        - {type: Pods, value: 1, periodSeconds: 120}
+{{- end }}
+{{- $minimum := ternary $gw.autoscaling.minReplicas $gw.replicaCount $gw.autoscaling.enabled -}}
+{{- /* One replica with minAvailable 1 allows no disruption at all, and a node drain would hang. */ -}}
+{{- if and $gw.podDisruptionBudget.enabled (gt (int $minimum) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mcp-platform.gateway" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  minAvailable: {{ $gw.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $sel | nindent 6 }}
+{{- end }}

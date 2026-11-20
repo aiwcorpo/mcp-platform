@@ -1,0 +1,30 @@
+# Rendered by the container command (envsubst of the variables below) into /tmp/servers.conf.
+# The origin the upstreams ever see; never the Host a client wrote.
+map $server_port $public_host { default "${PUBLIC_HOST}"; }
+map $server_port $public_port { default "${MCP_HTTPS_PORT}"; }
+
+server {
+  listen ${MCP_HTTP_PORT};
+  server_name _;
+  location = /__proxy/health { default_type text/plain; return 200 "ok\n"; }
+  location / { return 301 ${MCP_PUBLIC_ORIGIN}$request_uri; }
+}
+
+# A TLS client that asks for another name gets no certificate at all.
+server {
+  listen ${MCP_HTTPS_PORT} ssl default_server;
+  server_name _;
+  ssl_reject_handshake on;
+}
+
+server {
+  listen ${MCP_HTTPS_PORT} ssl;
+  server_name ${MCP_DOMAIN};
+  ssl_certificate /etc/nginx/tls/tls.crt;
+  ssl_certificate_key /etc/nginx/tls/tls.key;
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_session_cache shared:tls:10m;
+  ssl_session_timeout 1h;
+  ssl_session_tickets off;
+  include /etc/nginx/routes.conf;
+}
