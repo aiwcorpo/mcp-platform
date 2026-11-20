@@ -1,0 +1,10 @@
+apiVersion: v2
+name: mcp-platform
+description: MCP Platform gateway, credential broker, portal and nginx on Kubernetes, with PostgreSQL, Redis, Keycloak and OpenBao supplied by the operator
+type: application
+version: 0.1.0
+appVersion: "2.2.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/aiwcorpo/mcp-platform
+sources:
+  - https://github.com/aiwcorpo/mcp-platform

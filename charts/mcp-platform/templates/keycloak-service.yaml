@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-platform.keycloak" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak
+spec:
+  type: ExternalName
+  externalName: {{ required "keycloak.host is required" .Values.keycloak.host | quote }}

@@ -42,5 +42,8 @@ scripts/check-image-pins.sh
 echo "offline images"
 scripts/check-offline-images.sh
 
+echo "helm chart"
+scripts/check-chart.sh
+
 echo "text characters"
 scripts/check-text.sh

@@ -1,0 +1,121 @@
+{{- $pt := .Values.portal -}}
+{{- $sel := dict "root" . "component" "portal" -}}
+{{- $oidc := include "mcp-platform.kcInternal" . -}}
+{{- $derived := dict
+  "PORTAL_PUBLIC_BASE_URL" (include "mcp-platform.origin" .)
+  "PORTAL_OIDC_ISSUER_URI" (include "mcp-platform.issuer" .)
+  "PORTAL_OIDC_AUTHORIZATION_URI" (printf "%s/protocol/openid-connect/auth" (include "mcp-platform.issuer" .))
+  "PORTAL_OIDC_TOKEN_URI" (printf "%s/token" $oidc)
+  "PORTAL_OIDC_JWK_SET_URI" (printf "%s/certs" $oidc)
+  "PORTAL_OIDC_USER_INFO_URI" (printf "%s/userinfo" $oidc)
+  "PORTAL_OIDC_END_SESSION_URI" (printf "%s/logout" $oidc)
+  "PORTAL_BROKER_URL" (printf "https://%s:8443" (include "mcp-platform.broker" .))
+  "PORTAL_GATEWAY_ADMIN_URL" (printf "https://%s:8443" (include "mcp-platform.gateway" .))
+  "PORTAL_TRUSTED_PROXIES" (required "portal.trustedProxies is required (regular expression of the nginx pod addresses)" $pt.trustedProxies)
+-}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-platform.portal" . }}-iga-catalog
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
+data:
+  iga-catalog.yaml: |
+    {{- .Files.Get "files/portal/iga-catalog.yaml" | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-platform.portal" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
+spec:
+  replicas: {{ $pt.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-platform.selectorLabels" $sel | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with (merge (dict) $pt.podAnnotations .Values.podAnnotations) }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mcp-platform.fullname" . }}
+      # A Service named mcp-gateway makes the kubelet inject MCP_GATEWAY_PORT=tcp://..., which is a setting of the gateway.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- include "mcp-platform.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "mcp-platform.podSecurityContext" (dict "root" . "runAsUser" $pt.runAsUser) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $pt.terminationGracePeriodSeconds }}
+      containers:
+        - name: portal
+          image: {{ include "mcp-platform.image" (dict "root" . "image" $pt.image) | quote }}
+          imagePullPolicy: {{ $pt.imagePullPolicy }}
+          securityContext:
+            {{- include "mcp-platform.containerSecurityContext" . | nindent 12 }}
+            runAsUser: {{ $pt.runAsUser }}
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            {{- include "mcp-platform.env" (dict "derived" $derived "env" $pt.env "extra" $pt.extraEnv) | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /actuator/health, port: http}
+            {{- toYaml $pt.probes.startup | nindent 12 }}
+          readinessProbe:
+            httpGet: {path: /actuator/health, port: http}
+            {{- toYaml $pt.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet: {path: /actuator/health, port: http}
+            {{- toYaml $pt.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $pt.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: own, mountPath: /certs/own, readOnly: true}
+            - {name: trust, mountPath: /certs/trust, readOnly: true}
+            - {name: env, mountPath: /secrets/portal/env, readOnly: true}
+            - {name: iga-catalog, mountPath: /config, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: own
+          secret: {secretName: {{ required "portal.tlsSecretName is required" $pt.tlsSecretName | quote }}, defaultMode: 0440}
+        - name: trust
+          secret: {secretName: {{ required "tls.trustSecretName is required" .Values.tls.trustSecretName | quote }}, defaultMode: 0444}
+        - name: env
+          secret: {secretName: {{ required "portal.envSecretName is required" $pt.envSecretName | quote }}, defaultMode: 0440}
+        - name: iga-catalog
+          configMap:
+            name: {{ default (printf "%s-iga-catalog" (include "mcp-platform.portal" .)) $pt.igaCatalogConfigMapName }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-platform.portal" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: portal
+spec:
+  selector:
+    {{- include "mcp-platform.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - {name: http, port: 8080, targetPort: http}

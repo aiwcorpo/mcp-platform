@@ -1,0 +1,106 @@
+{{- $br := .Values.broker -}}
+{{- $sel := dict "root" . "component" "broker" -}}
+{{- $derived := dict
+  "MCP_OIDC_ISSUER" (include "mcp-platform.issuer" .)
+  "MCP_OIDC_JWKS_URI" (printf "%s/certs" (include "mcp-platform.kcInternal" .))
+  "BROKER_BFFTOKEN_TOKENURL" (printf "%s/token" (include "mcp-platform.kcInternal" .))
+  "MCP_GATEWAY_JWKS_URI" (printf "https://%s:8443/.well-known/jwks.json" (index $br.env "MCP_GATEWAY_TLS_NAME"))
+  "MCP_BAO_ADDR" (required "openbao.addr is required" .Values.openbao.addr)
+  "MCP_PORTAL_URL" (include "mcp-platform.origin" .)
+  "MCP_REDIS_HOST" (required "redis.broker.host is required" .Values.redis.broker.host)
+  "MCP_REDIS_PORT" (.Values.redis.broker.port | toString)
+  "MCP_REDIS_USER" .Values.redis.broker.user
+  "MCP_DB_URL" (required "postgresql.broker.url is required" .Values.postgresql.broker.url)
+  "MCP_DB_USER" .Values.postgresql.broker.user
+-}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-platform.broker" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  replicas: {{ $br.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-platform.selectorLabels" $sel | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      {{- with (merge (dict) $br.podAnnotations .Values.podAnnotations) }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "mcp-platform.fullname" . }}
+      # A Service named mcp-gateway makes the kubelet inject MCP_GATEWAY_PORT=tcp://..., which is a setting of the gateway.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- include "mcp-platform.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "mcp-platform.podSecurityContext" (dict "root" . "runAsUser" $br.runAsUser) | nindent 8 }}
+      terminationGracePeriodSeconds: {{ $br.terminationGracePeriodSeconds }}
+      containers:
+        - name: broker
+          image: {{ include "mcp-platform.image" (dict "root" . "image" $br.image) | quote }}
+          imagePullPolicy: {{ $br.imagePullPolicy }}
+          securityContext:
+            {{- include "mcp-platform.containerSecurityContext" . | nindent 12 }}
+            runAsUser: {{ $br.runAsUser }}
+          ports:
+            - {name: internal, containerPort: 8443}
+          env:
+            {{- include "mcp-platform.env" (dict "derived" $derived "env" $br.env "extra" $br.extraEnv) | nindent 12 }}
+          startupProbe:
+            tcpSocket: {port: internal}
+            {{- toYaml $br.probes.startup | nindent 12 }}
+          readinessProbe:
+            tcpSocket: {port: internal}
+            {{- toYaml $br.probes.readiness | nindent 12 }}
+          livenessProbe:
+            tcpSocket: {port: internal}
+            {{- toYaml $br.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $br.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: own, mountPath: /certs/own, readOnly: true}
+            - {name: trust, mountPath: /certs/trust, readOnly: true}
+            - {name: env, mountPath: /secrets/broker/env, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: own
+          secret: {secretName: {{ required "broker.tlsSecretName is required" $br.tlsSecretName | quote }}, defaultMode: 0440}
+        - name: trust
+          secret: {secretName: {{ required "tls.trustSecretName is required" .Values.tls.trustSecretName | quote }}, defaultMode: 0444}
+        - name: env
+          secret: {secretName: {{ required "broker.envSecretName is required" $br.envSecretName | quote }}, defaultMode: 0440}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-platform.broker" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: broker
+spec:
+  selector:
+    {{- include "mcp-platform.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - {name: internal, port: 8443, targetPort: internal}
