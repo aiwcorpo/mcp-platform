@@ -1,0 +1,132 @@
+{{- $ng := .Values.nginx -}}
+{{- $sel := dict "root" . "component" "nginx" -}}
+{{- $domain := required "global.publicDomain is required" .Values.global.publicDomain -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mcp-platform.nginx" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+spec:
+  replicas: {{ $ng.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $sel | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "mcp-platform.selectorLabels" $sel | nindent 8 }}
+        {{- with .Values.podLabels }}{{ toYaml . | nindent 8 }}{{ end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/nginx-configmap.yaml") . | sha256sum | trunc 16 }}
+        {{- with (merge (dict) $ng.podAnnotations .Values.podAnnotations) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "mcp-platform.fullname" . }}
+      # A Service named mcp-gateway makes the kubelet inject MCP_GATEWAY_PORT=tcp://..., which is a setting of the gateway.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      {{- include "mcp-platform.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        {{- include "mcp-platform.podSecurityContext" (dict "root" . "runAsUser" $ng.runAsUser) | nindent 8 }}
+      containers:
+        - name: nginx
+          image: {{ include "mcp-platform.image" (dict "root" . "image" $ng.image) | quote }}
+          imagePullPolicy: {{ $ng.imagePullPolicy }}
+          securityContext:
+            {{- include "mcp-platform.containerSecurityContext" . | nindent 12 }}
+            runAsUser: {{ $ng.runAsUser }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              PUBLIC_HOST="${MCP_PUBLIC_ORIGIN#https://}"; export PUBLIC_HOST
+              envsubst '${MCP_DOMAIN} ${MCP_HTTPS_PORT} ${MCP_HTTP_PORT} ${MCP_PUBLIC_ORIGIN} ${PUBLIC_HOST}' \
+                < /etc/nginx/servers.conf.template > /tmp/servers.conf
+              sed -i -e "s/^\( *listen \)${MCP_HTTPS_PORT}\([ ;]\)/\1${LISTEN_HTTPS_PORT}\2/" \
+                     -e "s/^\( *listen \)${MCP_HTTP_PORT}\([ ;]\)/\1${LISTEN_HTTP_PORT}\2/" /tmp/servers.conf
+              exec nginx -g 'daemon off;'
+          env:
+            - {name: MCP_DOMAIN, value: {{ $domain | quote }}}
+            - {name: MCP_PUBLIC_ORIGIN, value: {{ include "mcp-platform.origin" . | quote }}}
+            - {name: MCP_HTTPS_PORT, value: {{ $ng.service.httpsPort | quote }}}
+            - {name: MCP_HTTP_PORT, value: {{ $ng.service.httpPort | quote }}}
+            - {name: LISTEN_HTTPS_PORT, value: {{ $ng.listenHttpsPort | quote }}}
+            - {name: LISTEN_HTTP_PORT, value: {{ $ng.listenHttpPort | quote }}}
+          ports:
+            - {name: https, containerPort: {{ $ng.listenHttpsPort }}}
+            - {name: http, containerPort: {{ $ng.listenHttpPort }}}
+          startupProbe:
+            httpGet: {path: /__proxy/health, port: http}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: {path: /__proxy/health, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: {path: /__proxy/health, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml $ng.resources | nindent 12 }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: tls, mountPath: /etc/nginx/tls, readOnly: true}
+            {{- range $file := list "nginx.conf" "servers.conf.template" "routes.conf" "proxy-common.conf" "to-portal.conf" "to-gateway.conf" "to-keycloak.conf" "keycloak-admin-allow.conf" "gateway-headers.conf" }}
+            - {name: conf, mountPath: {{ printf "/etc/nginx/%s" $file }}, subPath: {{ $file }}, readOnly: true}
+            {{- end }}
+            - {name: errors-gw, mountPath: /etc/nginx/errors/gw, readOnly: true}
+            - {name: errors-web, mountPath: /etc/nginx/errors/web, readOnly: true}
+      volumes:
+        - name: tmp
+          emptyDir: {sizeLimit: {{ $ng.tmpSizeLimit }}}
+        - name: tls
+          secret: {secretName: {{ required "nginx.tlsSecretName is required" $ng.tlsSecretName | quote }}, defaultMode: 0440}
+        - name: conf
+          configMap: {name: {{ include "mcp-platform.nginx" . }}}
+        {{- range $dir := list "gw" "web" }}
+        - name: errors-{{ $dir }}
+          configMap:
+            name: {{ include "mcp-platform.nginx" $ }}
+            items:
+              {{- range $path, $_ := $.Files.Glob (printf "files/nginx/errors/%s/*" $dir) }}
+              - {key: {{ printf "err-%s-%s" $dir (base $path) }}, path: {{ base $path | quote }}}
+              {{- end }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mcp-platform.nginx" . }}
+  labels:
+    {{- include "mcp-platform.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nginx
+  {{- with $ng.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ $ng.service.type }}
+  {{- with $ng.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  selector:
+    {{- include "mcp-platform.selectorLabels" $sel | nindent 4 }}
+  ports:
+    - {name: https, port: {{ $ng.service.httpsPort }}, targetPort: https}
+    - {name: http, port: {{ $ng.service.httpPort }}, targetPort: http}

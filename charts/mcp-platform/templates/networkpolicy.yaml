@@ -1,0 +1,48 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $nginx := dict "root" . "component" "nginx" }}
+{{- $gateway := dict "root" . "component" "gateway" }}
+{{- $broker := dict "root" . "component" "broker" }}
+{{- $portal := dict "root" . "component" "portal" }}
+{{- /* Compose publishes the portal's 8080 on no network but edge, and the portal and the gateway believe X-Forwarded-* from the
+       proxy only. These policies give the cluster the same shape: only the nginx pods reach the HTTP ports. */ -}}
+{{- range $policy := list
+    (dict "name" (include "mcp-platform.portal" .) "component" "portal" "target" $portal "from" (list $nginx) "port" 8080 "extra" .Values.networkPolicy.portal.extraIngress)
+    (dict "name" (include "mcp-platform.gateway" .) "component" "gateway" "target" $gateway "from" (list $nginx) "port" 8080 "extra" .Values.networkPolicy.gateway.extraIngress "internal" (list $broker $portal))
+    (dict "name" (include "mcp-platform.broker" .) "component" "broker" "target" $broker "from" (list $gateway $portal) "port" 8443 "extra" .Values.networkPolicy.broker.extraIngress) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $policy.name }}
+  labels:
+    {{- include "mcp-platform.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $policy.component }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "mcp-platform.selectorLabels" $policy.target | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        {{- range $policy.from }}
+        - podSelector:
+            matchLabels:
+              {{- include "mcp-platform.selectorLabels" . | nindent 14 }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: {{ $policy.port }}}
+    {{- if $policy.internal }}
+    - from:
+        {{- range $policy.internal }}
+        - podSelector:
+            matchLabels:
+              {{- include "mcp-platform.selectorLabels" . | nindent 14 }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 8443}
+    {{- end }}
+    {{- with $policy.extra }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end }}

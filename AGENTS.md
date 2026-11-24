@@ -13,7 +13,7 @@ CI (`.github/workflows/ci.yml`) runs one script, and so should you before a comm
 scripts/verify.sh
 ```
 
-It renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_GITLAB_URL`, under its own project
+It checks the chart (`scripts/check-chart.sh`: copies, image versions, `helm lint` and `helm template` when helm is installed) and renders `compose.yaml` alone and with `servers.example.yaml` (dummy `MCP_DOMAIN` and `MCP_GITLAB_URL`, under its own project
 name), checks that rendering without `MCP_DOMAIN` fails on purpose, runs `sh -n`, `bash -n` and shellcheck on every script, and
 runs `scripts/check-image-pins.sh`, `scripts/check-offline-images.sh` and `scripts/check-text.sh`. By hand, `docker compose --env-file <file> config -q` prints
 nothing on success.
@@ -31,6 +31,11 @@ on this machine. `down -v` deletes all platform data.
   `mcp-provisioner` and `mcp-credential-broker` are written here.
 - `openbao/server.hcl`, `openbao/run.sh` and `openbao/recovery-listener.hcl` (the server starts through run.sh, which restarts it with the listener while `openbao-recover` runs), `keycloak/realm-mcp.json` (imported only when the realm does not exist yet), `keycloak/configure.sh`
   (one-time `keycloak-config`), `nginx/` (`servers.conf.template` is rendered with envsubst at start), `portal/iga-catalog.yaml`.
+- `charts/mcp-platform/`: the Helm chart for Kubernetes (gateway with HPA, broker, portal, nginx; PostgreSQL, Redis, Keycloak and
+  OpenBao are the operator's). `files/` holds copies of `nginx/` and `portal/iga-catalog.yaml`, and `values.yaml` the image versions
+  of `compose.yaml`; `scripts/check-chart.sh` fails when they drift. A change of a variable in `compose.yaml` for these services
+  needs the matching change in the chart's `values.yaml` and templates, and `scripts/pin-images.sh` does not write the chart:
+  copy the new `<tag>@<digest>` values by hand.
 - `compose.offline.yaml`: the same images by repository and tag without digest, for hosts that load images with `docker load`.
   `scripts/check-offline-images.sh` fails when it names other images than `compose.yaml`; `scripts/pin-images.sh` updates the
   versions in it. A new service or a changed third-party tag needs the matching change there.
